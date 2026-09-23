@@ -143,3 +143,26 @@ resume and fork stay on the owning node; cold creates work everywhere. The syste
 running for manual testing. To return to one node:
 `gcloud container clusters resize barkland-test --node-pool kvm-pool-c2 --num-nodes 1 --zone us-central1-a --project gke-ai-eco-dev`.
 
+
+
+## Orchestrator: private Artifact Registry pulls for the SWE task images (2026-09-23)
+
+Tomer wants to test with the task images in `us-docker.pkg.dev/gke-ai-eco-dev/hicard`
+(R2E-Gym per-repository images, thousands of tags, and the SWE-rebench `sweb.eval.*`
+images). AgentENV pulls with `regctl`, not through the kubelet, so it needs registry
+credentials of its own. The runtime pool runs Workload Identity (`GKE_METADATA`), so the
+pod's identity is its Kubernetes ServiceAccount, `agentenv-system/default`.
+
+- Project-level change (recorded per AC-13): granted `roles/artifactregistry.reader` on
+  repository `hicard` to
+  `principal://iam.googleapis.com/projects/142966328212/locations/global/workloadIdentityPools/gke-ai-eco-dev.svc.id.goog/subject/ns/agentenv-system/sa/default`.
+- A `registry-creds` sidecar in the runtime pod fetches the Workload Identity access token
+  from the metadata server every 15 minutes and writes `~/.docker/config.json` (basic auth
+  `oauth2accesstoken:<token>`) into a memory-backed emptyDir shared with the runtime
+  container. `regctl` reads that file on every call, which sidesteps AgentENV's
+  startup-only credential loading (proposal gap 5) for standard OCI pulls. Lazy overlaybd
+  reads would still need the startup-time config; not relevant for these images.
+- Not done: overlaybd conversion pipeline; the images are pulled and converted on the node
+  on first use (about 1.3 GB compressed each), so expect tens of seconds for a first create
+  and cache eviction pressure on the 100 GB node disk with many distinct images.
+\n

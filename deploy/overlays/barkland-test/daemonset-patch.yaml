@@ -56,3 +56,48 @@ spec:
             requests:
               cpu: "2"
               memory: 8Gi
+          volumeMounts:
+            # regctl (AgentENV's image puller) reads $HOME/.docker/config.json on every
+            # call, so a refreshed short-lived token works for private Artifact Registry
+            # pulls even though AgentENV itself loads credentials only at startup.
+            - name: registry-creds
+              mountPath: /root/.docker
+        # Workload Identity token refresher. The pool runs GKE_METADATA, so the pod's
+        # Kubernetes ServiceAccount (agentenv-system/default) is the identity; it holds
+        # roles/artifactregistry.reader on the repositories listed in plans/decisions.md.
+        # Tokens live about an hour; refresh every 15 minutes and write atomically.
+        - name: registry-creds
+          image: busybox:1.36
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -u
+              while true; do
+                tok=$(wget -qO- --header 'Metadata-Flavor: Google' \
+                  'http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token' \
+                  | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p')
+                if [ -n "$tok" ]; then
+                  auth=$(printf 'oauth2accesstoken:%s' "$tok" | base64 | tr -d '\n')
+                  printf '{"auths":{"us-docker.pkg.dev":{"auth":"%s"},"us-central1-docker.pkg.dev":{"auth":"%s"}}}\n' "$auth" "$auth" > /creds/config.json.tmp \
+                    && mv /creds/config.json.tmp /creds/config.json \
+                    && echo "registry-creds: refreshed $(date -u +%FT%TZ)"
+                else
+                  echo "registry-creds: WARNING no token from the metadata server; retrying in 60s" >&2
+                  sleep 60; continue
+                fi
+                sleep 900
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+          securityContext:
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: registry-creds
+              mountPath: /creds
+      volumes:
+        - name: registry-creds
+          emptyDir:
+            medium: Memory
