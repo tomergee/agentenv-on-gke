@@ -39,7 +39,7 @@ boot_args = "console=ttyS0 reboot=k panic=1 pci=off mitigations=off init=/init d
 # allowed_extra_boot_args_prefixes = ["aenv-custom."]
 
 # Maximum API-socket wait in seconds.
-socket_timeout_secs = 3
+socket_timeout_secs = 15
 # API-socket polling interval in milliseconds.
 socket_poll_ms = 1
 

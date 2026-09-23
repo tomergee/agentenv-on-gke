@@ -322,3 +322,13 @@ create p50 3.6 s, first command p50 1.1 s, about 8 minutes for the set. One firs
 `create_failed` with HTTP 000 (a dropped connection on the client side) passed on retry.
 Sandboxes were killed as they finished; none left running.
 
+## Orchestrator: burst-concurrency test and Firecracker socket timeout (2026-09-23)
+
+Ran 1, 10 and 100 simultaneous creates from distinct converted images (docs/concurrency-report.md).
+1 and 10 behave identically (about 2.6 s to running); 100 serializes on per-node CPU (median
+8 to 9 s, max 10.9 s, 25 per node). 3 of 100 creates failed with "set machine configuration:
+connection refused" on the Firecracker API socket. Raised `[firecracker] socket_timeout_secs`
+from 3 to 15 in the overlay config (rolled out); the rerun failed 1 of 100 with the same
+error, so the cause is a spawn-readiness race without retry, not the timeout. Kept the 15 s
+setting. No orphan sandboxes after any run.
+

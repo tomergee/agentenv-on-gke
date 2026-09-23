@@ -45,6 +45,7 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 31 | AgentENV | API key rotation: the gateway injects its own copy of the key toward nodes and reads it only at startup; rotating the Secret without restarting the gateway breaks every call; no dual-key window **[V-probe]** | Medium | Restart gateway and runtime pods on rotation (the repo's deploy script does); upstream: reload on change or accept two keys during rotation | 4.6, 9 |
 | 32 | AgentENV | No configurable P2P or CDN cache address: the lazy reader's Dragonfly-compatible "accelerate" hook is set only by AgentENV's experimental built-in transport, and the storage config is regenerated at each start **[V-code]** | Medium | Upstream a `p2p_config.address` setting (or startup patch); then deploy Dragonfly peers per node and preheat the converted images | 4.12 |
 | 33 | AgentENV + Artifact Registry | The lazy block reader stores a redirect `Location` verbatim; Artifact Registry sends a relative one, so lazy loading from Artifact Registry fails on stock v0.2.2 ("relative URL without a base") **[V-probe]** | Blocker for lazy loading on Artifact Registry | Six-line patch (resolve against the request URL) built into the prototype's runtime image; upstream PR needed | 4.12, 9 |
+| 34 | AgentENV | Under a start burst (about 25 simultaneous per node) 1 to 3 % of creates fail with "set machine configuration: connection refused" on the Firecracker API socket; no retry in the runtime **[V-probe]** | Medium | Retry the configuration call upstream; size `[pool.firecracker]` for the expected burst; stagger client bursts; treat create 500 as retriable | 9 |
 | 30 | AgentENV | API skew between releases and `main`: v0.2.2 lacks `/v2/sandboxes/{id}/connect` (breaks the E2B SDK's connect), `/proxy` prefix returns 404, `?state=a,b` returns 400 **[V-probe]** | Medium | Pin the API version in the SDK backend; feature-detect; track upstream releases | 5.2, 9 |
 
 ---
@@ -1008,6 +1009,14 @@ across 4 nested-virtualization nodes: **500 of 500 passed**; create to running p
 p90 4.0 s, max 9.0 s; first command p50 1.1 s; the whole set took about 8 minutes. This is
 the density-and-latency claim tested against the real task-image catalog rather than a
 sample.
+
+**Burst concurrency (2026-09-23) [V-probe].** 1, 10 and 100 sandboxes started at the same
+instant from distinct converted images, 2 CPU / 2 GB each, across the 4 nested-virt nodes:
+1 and 10 behave the same (about 2.6 s to running, 3.2 s to first command); 100 serializes on
+per-node CPU at 25 per node (median 8 to 9 s to running, max 10.9 s, first command done for
+all within 11.6 s). 1 to 3 of 100 creates fail with a refused connection on the Firecracker
+API socket during a burst; the runtime has no retry there (gap 34). Details in the prototype
+repository's `docs/concurrency-report.md`.
 
 **Still unverified after the prototype:** bare-metal nodes, a shared snapshot repository on
 Cloud Storage or Filestore (and the conditional-write gap 28), templates and snapshot
