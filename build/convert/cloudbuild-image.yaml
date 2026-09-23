@@ -1,0 +1,14 @@
+# Builds the converter tool image. Submit with the build/convert directory as the source:
+#   gcloud builds submit build/convert --config build/convert/cloudbuild-image.yaml \
+#     --project gke-ai-eco-dev --region us-central1 --substitutions _TAG=<tag>
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', 'us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/overlaybd-convertor:${_TAG}', '.']
+images:
+  - 'us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/overlaybd-convertor:${_TAG}'
+substitutions:
+  _TAG: v1.4.5-obd1.0.18
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s

@@ -1,0 +1,30 @@
+# One conversion shard. Submit with build/convert as the source (it carries
+# verified-instances.txt) and either _INSTANCES (explicit list) or _SHARD/_SHARDS:
+#   gcloud builds submit build/convert --config build/convert/cloudbuild-convert.yaml \
+#     --project gke-ai-eco-dev --region us-central1 --async \
+#     --substitutions _SHARD=3,_SHARDS=10
+# Runs on the Cloud Build worker with a 200 GB disk; each image uses a few GB of scratch
+# under /workspace/work and is cleaned up. Auth is the build service account's token.
+steps:
+  - name: us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/overlaybd-convertor:${_CONVERTOR_TAG}
+    env:
+      - SRC_REPO=${_SRC_REPO}
+      - DST_REPO=${_DST_REPO}
+      - INSTANCES=${_INSTANCES}
+      - SHARD=${_SHARD}
+      - SHARDS=${_SHARDS}
+      - INSTANCES_FILE=/workspace/verified-instances.txt
+      - WORK=/workspace/work
+      - VSIZE=64
+substitutions:
+  _CONVERTOR_TAG: v1.4.5-obd1.0.18
+  _SRC_REPO: us-docker.pkg.dev/gke-ai-eco-dev/swebench-mirror/swebench-verified
+  _DST_REPO: us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/swebench-verified
+  _INSTANCES: ''
+  _SHARD: '0'
+  _SHARDS: '1'
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 200
+  logging: CLOUD_LOGGING_ONLY
+timeout: 21600s
