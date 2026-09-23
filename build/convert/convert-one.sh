@@ -36,7 +36,10 @@ rc=$?
 rm -rf "$work"
 if [ $rc -ne 0 ]; then echo "RESULT $inst FAIL convert $(elapsed)"; tail -5 "/tmp/conv-$inst.log"; exit 1; fi
 # Drop the standard-format staging copy; the converted image has its own layers and config.
+# Artifact Registry refuses to delete a manifest that still has a tag
+# (GOOGLE_MANIFEST_DANGLING_TAG), so untag first, then delete by digest.
 if T=$(login) && d=$(crane digest "$staging" 2>/dev/null) && [ -n "$d" ]; then
-  crane delete "$DST_REPO@$d" >/dev/null 2>&1 || echo "WARN $inst staging manifest not deleted ($staging)"
+  { crane delete "$staging" >/dev/null 2>&1 && crane delete "$DST_REPO@$d" >/dev/null 2>&1; } \
+    || echo "WARN $inst staging copy not deleted ($staging); scripts/convert-cleanup-staging.sh removes it"
 fi
 echo "RESULT $inst OK $(elapsed)"

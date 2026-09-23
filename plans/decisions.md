@@ -297,3 +297,10 @@ Using the images: `POST /sandboxes-cold` with
 the runtime resolves them as overlaybd-native and lazy-loads (about 4.5 s to running on any
 node). Requires the patched runtime image now pinned in the overlay.
 
+Staging cleanup detail: the registry API returns 400 `GOOGLE_MANIFEST_DANGLING_TAG` for a
+delete by digest while the `-src` tag exists, so the in-build step must untag first
+(`convert-one.sh` fixed and the converter image rebuilt under the same tag; the 10 shards
+already running use the earlier image and leave `-src` tags behind). Run
+`scripts/convert-cleanup-staging.sh` once the shards finish to remove them (about 1.2 GB of
+registry storage each).
+
