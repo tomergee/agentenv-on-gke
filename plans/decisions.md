@@ -103,3 +103,18 @@ the reporter's shutdown, not the preStop hook, ublk or Firecracker. Fix applied:
 namespace. `terminationGracePeriodSeconds` stays at upstream's 3600 s; it never bounded this
 wait, and lowering it would only shorten the drain that protects running sandboxes.
 Upstream-worthy: bound the heartbeat RPC (or skip it) once shutdown has begun.
+
+## O-8: the gateway's node list lags a few minutes after a scheduler restart (2026-09-23, developer round 2)
+
+`GET /nodes` on the gateway is served from the scheduler's heartbeat records (`ListObservedNodes`),
+not from EndpointSlice discovery. After `kubectl rollout restart deploy/agentenv-scheduler`
+(new pod Ready in 14 s) the list stayed empty for **159 s**; the runtime's log shows
+`observability heartbeat failed ... retry_after_secs=5` during that window, then recovery.
+The same lag followed the round-2 deploy, where the scheduler and runtime pods restarted
+together, and it made the first AC-2 attempt fail while AC-3..AC-10 passed: `Schedule`
+uses discovered nodes and treats a node without a heartbeat snapshot as eligible, so
+creates, commands, pause, resume and fork were unaffected. Likely cause: the runtime's
+long-lived gRPC connection to the scheduler's ClusterIP keeps pointing at the old pod until
+TCP retransmission gives up (about two minutes); a client keepalive or reconnect-on-error
+would fix it upstream. Prototype handling: `tests/smoke.sh` waits up to 300 s
+(`NODES_WAIT`) for the node to be listed and records the wait; AC-2's pass rule says so.

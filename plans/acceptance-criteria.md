@@ -51,7 +51,10 @@ The API paths are those of AgentENV v0.2.2 (`src/api/openapi.yml`). There is no
 - **Expected:** `/health` returns 204 (No Content). `/nodes` returns a JSON array with exactly one node
   whose ID is the runtime pod name (`AENV_NODE_ID` is the pod name). `/nodes/<id>`
   returns the node detail with CPU and memory figures and a sandbox count of 0.
-- **Pass rule:** all three responses as expected; `/nodes` must not be empty.
+- **Pass rule:** all three responses as expected; `/nodes` must list the node within 300 s
+  of the first call. The list comes from the scheduler's heartbeat records and lags up to
+  a few minutes after a scheduler or runtime restart (measured 159 s after a scheduler-only
+  restart), while sandbox creation keeps working; record the wait.
 - **Evidence:** the three responses.
 
 ## AC-3: Cold create reaches running

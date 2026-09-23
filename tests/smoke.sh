@@ -78,12 +78,22 @@ NODE=$(echo "$PODS" | awk '/agentenv-node-/{print $7}' | head -1)
 NODEPOOL=$(kubectl --context "$KCTX" get node "$NODE" -o jsonpath='{.metadata.labels.cloud\.google\.com/gke-nodepool}' 2>/dev/null)
 if [[ "$READY" == 3 && "$NODEPOOL" == "$POOL" ]]; then pass 1 "3/3 pods Ready; node pod $NODEPOD on $NODE ($NODEPOOL)"; else fail 1 "ready=$READY pool=$NODEPOOL"; echo "$PODS"; fi
 
-# AC-2 health + nodes
+# AC-2 health + nodes. The gateway lists nodes from the scheduler's heartbeat records, which
+# lag up to a few minutes after a scheduler or runtime restart (RESULTS.md O-8), while
+# scheduling itself keeps working; wait a bounded time for the node to appear.
 HC=$(curl -s -o /dev/null -w '%{http_code}' "$GW/health")
-NODES_JSON=$(api "$GW/nodes")
-NODEID=$(echo "$NODES_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"] if len(d)==1 else "")' 2>/dev/null)
+NODES_WAIT=${NODES_WAIT:-300}
+S_nodes=$(now); NODEID=""
+while :; do
+  NODES_JSON=$(api "$GW/nodes")
+  NODEID=$(echo "$NODES_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"] if len(d)==1 else "")' 2>/dev/null)
+  [[ -n "$NODEID" ]] && break
+  (( $(echo "$(since "$S_nodes") > $NODES_WAIT" | bc) )) && break
+  sleep 5
+done
+T_nodes=$(since "$S_nodes")
 DETAIL=$(api "$GW/nodes/$NODEID" | python3 -c 'import json,sys; d=json.load(sys.stdin); m=d.get("metrics",{}); print("status=%s cpu=%s memGB=%s sandboxes=%s" % (d.get("status"), m.get("cpuCount"), round(m.get("memoryTotalBytes",0)/2**30,1), d.get("sandboxCount")))' 2>/dev/null)
-if [[ "$HC" =~ ^20[04]$ && "$NODEID" == "$NODEPOD" && "$DETAIL" == status=ready* ]]; then pass 2 "/health $HC; /nodes -> $NODEID; $DETAIL"; else fail 2 "health=$HC nodes=$NODEID detail=$DETAIL"; fi
+if [[ "$HC" =~ ^20[04]$ && "$NODEID" == "$NODEPOD" && "$DETAIL" == status=ready* ]]; then pass 2 "/health $HC; /nodes -> $NODEID after ${T_nodes}s; $DETAIL"; else fail 2 "health=$HC nodes=$NODEID (waited ${T_nodes}s of ${NODES_WAIT}s) detail=$DETAIL"; fi
 
 # AC-3 cold create
 read -r ID CREATE_T < <(create); CREATED+=("$ID")
@@ -158,6 +168,7 @@ echo "| Pause (AC-5) | ${T_pause} | POST duration |"
 echo "| Resume to first read (AC-6) | ${T_resume} | POST to first successful GET /files of the marker (0.2 s polling) |"
 echo "| Fork of 2 to both answering (AC-7) | ${T_fork} | POST (call itself ${T_fork_call} s) to both children serving the marker |"
 echo "| Warm second create (AC-10) | ${T_warm} | same as AC-3 with the image already converted |"
+echo "| Node listed by the gateway (AC-2) | $T_nodes | seconds until GET /nodes returned the node (0 when immediate) |"
 echo "| Create while another runs (AC-10) | ${T_warm_concurrent} | same |"
 [[ -n "${T_create}" && -n "${T_rtt}" && -n "${T_pause}" && -n "${T_resume}" && -n "${T_fork}" && -n "${T_warm}" ]] && pass 9 "all timing rows recorded" || fail 9 "a timing is missing"
 echo
