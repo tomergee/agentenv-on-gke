@@ -11,6 +11,8 @@ and start latency.
   across a GKE Pod Snapshot restore on gVisor.
 - `plans/execution-plan.md` — how the prototype on the `barkland-test` cluster is built,
   tested and reviewed (multi-agent plan).
+- `docs/testing-guide.md` — what the smoke test and the whole-set sweep check, how to run
+  them, how to read the timings, and the results recorded so far.
 
 Prototype target: cluster `barkland-test` (project `gke-ai-eco-dev`, `us-central1-a`),
 node pool `kvm-pool-c2` (nested virtualization, COS, kernel 6.12).

@@ -1,5 +1,7 @@
 # Tests
 
+Full guide: [`docs/testing-guide.md`](../docs/testing-guide.md).
+
 Smoke tests for the AgentENV prototype on `barkland-test`, mapped to
 [../plans/acceptance-criteria.md](../plans/acceptance-criteria.md). Results of the last
 run are in [RESULTS.md](RESULTS.md).
