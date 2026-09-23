@@ -85,3 +85,21 @@ sandboxes (172 s and 301 s measured; gateway and scheduler pods are gone within 
 - **L6 snapshot cache.** The upstream `[snapshot]` section exposes no node-local cache size
   key in v0.2.2 (the commented `cache_max_size_gb` belongs to `[backend.oss]`, unused with
   `posix_fs`), so nothing was changed; the snapshot store itself lives on the same 100 GB disk.
+
+## O-1 root cause: runtime shutdown waits on a vanished scheduler (2026-09-23, developer round 2)
+
+Measured by deleting the runtime pod (the DaemonSet recreates it) and streaming its log:
+
+| Scenario | Pod gone after | Where the time went |
+|---|---|---|
+| Scheduler up, no prior sandbox activity | 2 s | SIGTERM to "shutting down p2p transport" in 0.22 s |
+| Scheduler scaled to 0 first, after a create/pause/kill cycle | 132 s | 126 s inside "stopping observability reporter": the in-flight heartbeat RPC to the scheduler Service (no endpoints) only fails after about two minutes; then three unregister attempts fail within 0.6 s and the rest of shutdown takes 1.3 s |
+
+A namespace delete removes the scheduler Deployment within seconds while the runtime pod is
+still in its preStop drain, so the runtime always hits the slow path; the tester's 172 s and
+301 s teardowns are this wait (one or two heartbeat timeouts). It is upstream behaviour in
+the reporter's shutdown, not the preStop hook, ublk or Firecracker. Fix applied: the new
+`scripts/teardown.sh` deletes the DaemonSet while the scheduler is still serving, then the
+namespace. `terminationGracePeriodSeconds` stays at upstream's 3600 s; it never bounded this
+wait, and lowering it would only shorten the drain that protects running sandboxes.
+Upstream-worthy: bound the heartbeat RPC (or skip it) once shutdown has begun.
