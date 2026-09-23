@@ -23,8 +23,8 @@ K create namespace "$NS" --dry-run=client -o yaml | K apply -f - >/dev/null
 ROTATE=${ROTATE_SECRETS:-0}
 restart_needed=0
 if [[ "$ROTATE" != 1 ]] && K -n "$NS" get secret agentenv-auth >/dev/null 2>&1; then
-  K -n "$NS" get secret agentenv-auth -o go-template='{{index .data "AENV_API_KEY" | base64decode}}' \
-    | { read -r key; printf 'AENV_API_KEY=%s\n' "$key"; } > "$SECRETS/agentenv-auth.env"
+  key=$(K -n "$NS" get secret agentenv-auth -o go-template='{{index .data "AENV_API_KEY" | base64decode}}')
+  printf 'AENV_API_KEY=%s\n' "$key" > "$SECRETS/agentenv-auth.env"
   echo "using the API key already in Secret/agentenv-auth (synced to $SECRETS/)"
 else
   # 64 hex chars: within AgentENV's 32-256 character API key bounds.
