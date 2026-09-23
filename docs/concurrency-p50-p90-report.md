@@ -88,7 +88,39 @@ No failure occurred on the resume path in any run. Raising `[firecracker] socket
 from 3 to 15 did not remove it (the error is a refused connection, not a timeout). Every
 failed create was cleaned up by the runtime; no sandbox was left behind after any run.
 
-## 6. What would change the curve
+## 6. How 100 sandboxes ran on 32 vCPUs and 116 GB
+
+On paper the 100-burst declared 200 vCPUs and 200 GB against four nodes with 8 vCPUs and
+about 29 GB allocatable each. It ran because declarations are not consumption anywhere in
+this stack, and an idle microVM consumes almost nothing:
+
+- **CPU.** A guest vCPU is a host thread scheduled by KVM. An idle guest halts and its thread
+  sleeps. Measured: 25 idle sandboxes per node used about 17 to 21 % of the node's CPU,
+  roughly 60 millicores each (envd plus guest timer ticks under nested virtualization). The
+  declared 50 vCPUs per node only mattered during the boot burst, which is exactly when the
+  node hit 100 % for 8 s (section 4).
+- **Memory.** Firecracker maps guest RAM as ordinary anonymous memory; pages become real only
+  when the guest touches them. A freshly booted guest touches its kernel, init, envd and the
+  few files it read. Measured: node memory went from about 2 to 6 GB idle to 5 to 10 GB with
+  25 sandboxes, about 140 MB per sandbox against 2 GB declared. Guest kernels boot with
+  memory-reclaim tuning and the runtime uses ballooning, so memory a guest stops using
+  returns to the host. The root filesystem is a lazily loaded block device, not memory.
+- **Nothing enforced the declarations.** Kubernetes never sees the VMs (the runtime pod
+  requests 2 CPUs and 8 GB, the microVMs live outside its accounting); the AgentENV scheduler's
+  `node_resource_limit` was left unset, so placement stayed round-robin; the runtime does not
+  reserve or pin guest memory.
+
+Where it breaks: if all 100 became active at once, CPU contention comes first (each active
+guest gets about a sixth of a core), then memory (25 guests touching their full 2 GB want
+50 GB on a 32 GB node; the kernel kills Firecracker processes, and the DaemonSet is
+configured so the runtime survives while the VMs are the victims), then disk if writable
+layers grow. The density claim therefore rests on idleness, which matches the 80 to 90 %
+idle assumption for RL rollouts waiting on inference and tool calls; workloads that run tests
+or builds inside the sandbox have larger working sets and a lower safe ratio. The practical
+rule: set the scheduler's allocation limits from measured working sets, not declared sizes,
+so a burst of activity degrades into queuing instead of kills.
+
+## 7. What would change the curve
 
 1. **Templates (committed snapshots) for the task images**, so every start is a resume: the
    resume path is 10 to 15 times faster at low concurrency and does not spawn a Firecracker
