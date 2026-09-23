@@ -228,3 +228,10 @@ Conclusion: after a node has converted an image once, create time for the 1.3 GB
 is the same as for `ubuntu:22.04` (about 2.3 s). The cost is the first conversion per node
 per image, which round-robin placement spreads across every node.
 
+## SWE-bench Verified, first image (2026-09-23)
+
+`swebench-mirror/swebench-verified:sweb.eval.x86_64.astropy__astropy-12907`, requested 2 CPU
+and 4096 MB: POST 42.3 s (pull 1.2 GB + conversion), running at 42.7 s; guest saw 2 CPUs,
+3.9 GB RAM, a 63 GB root disk, `/testbed`, Python 3.9.21; command round trip and kill normal.
+Converted footprint on the node: about 3.5 to 4.7 GB per SWE image.
+

@@ -192,3 +192,25 @@ inside the create call. Decision: accepted for the prototype; recorded as a desi
 the proposal (image-aware placement, or an overlaybd conversion pipeline so nodes lazy-load
 instead of converting).
 
+## Orchestrator: SWE-bench Verified access and first run (2026-09-23)
+
+- Project-level change (AC-13): granted `roles/artifactregistry.reader` on repository
+  `swebench-mirror` to the same Workload Identity principal as for `hicard`. The Verified set
+  is `us-docker.pkg.dev/gke-ai-eco-dev/swebench-mirror/swebench-verified:sweb.eval.x86_64.<instance>`
+  (500 instances, 1,500 tags including the two hash aliases per image, about 1.2 GB
+  compressed each, 16 layers).
+- First run, `astropy__astropy-12907`, requested `cpuCount: 2, memoryMB: 4096`: create POST
+  42.3 s (pull + conversion), running at 42.7 s; inside the guest `nproc` = 2, memory 3.9 GB,
+  root disk 63 GB, `/testbed` present, Python 3.9.21. Killed afterwards.
+- Converted footprint: about 3.5 to 4.7 GB of overlaybd commits per SWE image per node (base
+  layers are shared between images from the same family). 500 images would need roughly
+  2 TB per node; the nodes have 100 GB disks and a 15 GB image cache, so the whole set
+  cannot be held converted on the nodes as configured. Options recorded in the report to
+  Tomer: bigger cache or disks, or the overlaybd pre-conversion pipeline (lazy loading).
+
+Sizing facts (from the v0.2.2 spec and config): cold creates take `cpuCount`, `memoryMB`
+and `diskSizeMB` in the request body; unset values come from the node's `[machine]` config
+(`vcpu_count = 2`, `mem_size_mib = 1024`); the root disk can grow but not shrink
+(`allow_shrink = false`). Template-based starts inherit the template's sizes, set at build
+time (`aenv template create --cpu --memory`), and cannot be overridden per start.
+
