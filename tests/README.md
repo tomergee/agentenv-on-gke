@@ -48,3 +48,11 @@ serve. envd traffic is routed through the gateway with the `X-API-Key`, `e2b-san
 and `e2b-sandbox-port: 49983` headers (`extra_sandbox_headers`), the same contract curl
 uses. The `/proxy/...` path prefix from newer upstream docs is not served by v0.2.2;
 header routing with the original path (`/health`, `/files?path=...`) is.
+
+## Sweep every converted image
+
+`tests/sweep.sh` runs each converted SWE-bench Verified image once (cold create from the
+overlaybd image with 2 CPU / 4096 MB, wait for running, one command via the E2B SDK, kill),
+`PAR` at a time (default 8), and writes `tests/sweep-results.csv` plus `tests/sweep-summary.md`.
+Only instances whose converted tag exists are run; re-running fills gaps (`RESUME=1`).
+`tests/sweep-one.sh <instance>` is the per-image worker.
