@@ -165,4 +165,19 @@ pod's identity is its Kubernetes ServiceAccount, `agentenv-system/default`.
 - Not done: overlaybd conversion pipeline; the images are pulled and converted on the node
   on first use (about 1.3 GB compressed each), so expect tens of seconds for a first create
   and cache eviction pressure on the 100 GB node disk with many distinct images.
+
+
+## Orchestrator: API key rotation breaks the gateway until it restarts (2026-09-23)
+
+Running `scripts/deploy.sh` from a second checkout (which had its own `.secrets/`) replaced
+`Secret/agentenv-auth` with a different key. The runtime pods restarted (the DaemonSet spec
+had changed) and picked up the new key; the gateway Deployment did not change, kept the old
+key from its environment, and, because the gateway injects its own key when proxying to the
+nodes, every authenticated request returned 401 even though clients sent the key from the
+Secret. Fix applied: `deploy.sh` now treats the cluster's Secrets as the source of truth
+(pulls them into `.secrets/`, never overwrites a live key unless `ROTATE_SECRETS=1`) and
+restarts the gateway and runtime pods whenever it changes a Secret. Operational rule for
+any deployment: rotating the API key means restarting the gateway and every runtime pod;
+there is no hot reload and no dual-key window. `tests/smoke.sh` AC-1 now accepts pods with
+more than one container (the credential sidecar) and any number of runtime nodes.
 \n

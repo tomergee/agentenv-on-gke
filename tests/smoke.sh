@@ -72,11 +72,15 @@ echo "== AgentENV smoke test $(date -u +%Y-%m-%dT%H:%M:%SZ) gateway=$GW image=$I
 
 # AC-1 pods Ready
 PODS=$(K get pods -o wide --no-headers 2>/dev/null)
-READY=$(echo "$PODS" | awk '$2=="1/1" && $3=="Running"' | wc -l | tr -d ' ')
-NODEPOD=$(echo "$PODS" | awk '/agentenv-node-/{print $1}' | head -1)
+TOTAL=$(echo "$PODS" | grep -c .)
+# Ready = all containers in the pod ready (the runtime pod also runs a credential sidecar).
+READY=$(echo "$PODS" | awk '$3=="Running" {split($2,a,"/"); if (a[1]==a[2]) n++} END{print n+0}')
+NODEPODS=$(echo "$PODS" | awk '/agentenv-node-/{print $1}')
+NODEPOD=$(echo "$NODEPODS" | head -1)
 NODE=$(echo "$PODS" | awk '/agentenv-node-/{print $7}' | head -1)
 NODEPOOL=$(kubectl --context "$KCTX" get node "$NODE" -o jsonpath='{.metadata.labels.cloud\.google\.com/gke-nodepool}' 2>/dev/null)
-if [[ "$READY" == 3 && "$NODEPOOL" == "$POOL" ]]; then pass 1 "3/3 pods Ready; node pod $NODEPOD on $NODE ($NODEPOOL)"; else fail 1 "ready=$READY pool=$NODEPOOL"; echo "$PODS"; fi
+NNODES=$(echo "$NODEPODS" | grep -c .)
+if [[ "$TOTAL" -ge 3 && "$READY" == "$TOTAL" && "$NODEPOOL" == "$POOL" ]]; then pass 1 "$READY/$TOTAL pods Ready ($NNODES runtime node pod(s)); first node pod $NODEPOD on $NODE ($NODEPOOL)"; else fail 1 "ready=$READY/$TOTAL pool=$NODEPOOL"; echo "$PODS"; fi
 
 # AC-2 health + nodes. The gateway lists nodes from the scheduler's heartbeat records, which
 # lag up to a few minutes after a scheduler or runtime restart (RESULTS.md O-8), while
