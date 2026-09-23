@@ -1,0 +1,42 @@
+# Builds the AgentENV gateway and scheduler images from an upstream source checkout.
+# Upstream publishes only the runtime image (ghcr.io/kvcache-ai/aenv-server); these two
+# Go services must be built. Context: the upstream repo root (or a trimmed copy holding
+# services/ and deploy/docker/). TARGETARCH/TARGETOS are BuildKit-only ARGs, so pass them.
+substitutions:
+  _REGISTRY: us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv
+  _TAG: v0.2.2
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: gateway
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile.gateway
+      - --build-arg
+      - TARGETARCH=amd64
+      - --build-arg
+      - TARGETOS=linux
+      - -t
+      - ${_REGISTRY}/agentenv-gateway:${_TAG}
+      - .
+  - name: gcr.io/cloud-builders/docker
+    id: scheduler
+    waitFor: ["-"]
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile.scheduler
+      - --build-arg
+      - TARGETARCH=amd64
+      - --build-arg
+      - TARGETOS=linux
+      - -t
+      - ${_REGISTRY}/agentenv-scheduler:${_TAG}
+      - .
+images:
+  - ${_REGISTRY}/agentenv-gateway:${_TAG}
+  - ${_REGISTRY}/agentenv-scheduler:${_TAG}
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1800s
