@@ -7,7 +7,10 @@
 
 # Base directory for persistent state, caches, logs, and generated files.
 # AENV_HOME_PATH overrides this value.
-home_path = "/var/lib/aenv"  # barkland-test: hostPath-backed, 100 GB boot disk, no local SSD
+# barkland-test: the runtime image sets AENV_HOME_PATH=/workspace/env, which overrides this
+# value; keep them equal. /workspace is the node hostPath /var/lib/aenv (100 GB boot disk, no
+# local SSD), so the effective state directory on the node is /var/lib/aenv/env.
+home_path = "/workspace/env"
 
 # Transient sockets and network namespace state. AENV_RUNTIME_PATH overrides it.
 # runtime_path = "/run/aenv"
