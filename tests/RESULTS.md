@@ -122,3 +122,54 @@ None blocks the acceptance criteria. Ordered by impact.
 - Port-forwards: stopped.
 - Deployment: running, 3/3 Ready, disk 10.4 of 94 GB on the node.
 - Venv `/tmp/aenv-test-venv` kept for the reviewer and re-runs (contents: `e2b`).
+
+## Round 2 re-run (2026-09-23, developer, after the review fixes)
+
+Deployment: `prototype` at the round-2 commits (images by digest, control plane on
+`default-pool`, Secrets created by `scripts/deploy.sh`, `home_path=/workspace/env`, new
+`scripts/teardown.sh`). Pods: gateway and scheduler on `default-pool` nodes, runtime
+`agentenv-node-xs2qb` on the kvm node. The harness now waits (bounded) for the gateway's
+node list (AC-2, see O-8). Three full runs were made during round 2; the last one, on a
+deployment fresh from `teardown.sh` + `deploy.sh`, is recorded here.
+
+| AC | Result | Evidence (trimmed) |
+|---|---|---|
+| AC-1 | pass | 3/3 pods Ready; node pod agentenv-node-xs2qb on gke-barkland-test-kvm-pool-c2-6b3ad0c5-axvc (kvm-pool-c2) |
+| AC-2 | pass | /health 204; /nodes -> agentenv-node-xs2qb after .508950000s; status=ready cpu=8 memGB=31.3 sandboxes=0 |
+| AC-3 | pass | 201, id=01a0cd2a-999b-78d1-a47c-25542191ab01, running after 2.578650000 s (POST 2.240212000 s) |
+| AC-4 | pass | SDK exit 0; guest kernel 6.1.175; PRETTY_NAME="Ubuntu 22.04.5 LTS"; marker=marker-1790148519; echo rtt 0.295 s |
+| AC-5 | pass | 204 in .454736000 s; listed paused, not running |
+| AC-6 | pass | 201 same id; marker intact (marker-1790148519); first read .868671000 s after POST; command ok |
+| AC-7 | pass | 2 children (01a0cd2a, 01a0cd2a); call .605906000 s, both answering 1.455656000 s; marker inherited; child writ |
+| AC-8 | pass | 3 deletes 204; none listed; GET parent 404 |
+| AC-9 | pass | all timing rows recorded |
+| AC-10 | pass | second create running after 2.472172000 s; a third created while the second was running after 2.410638000 s |
+| AC-11 | pass | `deploy.sh` twice on a live system (26 s, 28 s) and after teardown (29 s); API key reused each time; smoke passes afterwards |
+| AC-12 | pass | `teardown.sh` with one **running** sandbox: kill 204, DaemonSet and pod gone, namespace gone in **28 s** (was 172-301 s); node leftovers unchanged (`/workspace/env` 532 MB, `ublk_drv` loaded), documented in `plans/decisions.md` with `scripts/clear-node-state.sh` |
+| AC-13 | pass | only `agentenv-system` touched (plus one throwaway `curl` pod inside it during O-8 debugging, deleted); node pools, other namespaces and `agent-sandbox-system` untouched |
+
+Timings (seconds):
+
+| Cold create to running (AC-3) | 2.578650000 | POST duration + 1 s polling to first state=running |
+| Command round-trip (AC-4) | 0.295 | one echo via the E2B SDK (envd process API through the gateway) |
+| Pause (AC-5) | .454736000 | POST duration |
+| Resume to first read (AC-6) | .868671000 | POST to first successful GET /files of the marker (0.2 s polling) |
+| Fork of 2 to both answering (AC-7) | 1.455656000 | POST (call itself .605906000 s) to both children serving the marker |
+| Warm second create (AC-10) | 2.472172000 | same as AC-3 with the image already converted |
+| Node listed by the gateway (AC-2) | .508950000 | seconds until GET /nodes returned the node (0 when immediate) |
+| Create while another runs (AC-10) | 2.410638000 | same |
+
+Teardown with a running sandbox: 28 s wall clock. Redeploy after teardown: 29 s. Node disk
+after everything: 11 GB of 95 GB used.
+
+Round-2 observations:
+- **O-1 explained.** The 172-301 s teardowns were the runtime's shutdown waiting about
+  126 s on a heartbeat RPC to the already-deleted scheduler; with the scheduler up the same
+  shutdown takes 2 s. `teardown.sh` now removes the runtime before the namespace
+  (`plans/decisions.md`).
+- **O-8 new.** After a scheduler restart, `GET /nodes` on the gateway stays empty for up to
+  about 160 s (heartbeat records), while creates, commands, pause, resume and fork keep
+  working. The first round-2 smoke run failed AC-2 for this reason 70 s after a deploy; the
+  harness now waits up to 300 s and records the wait (0.4-0.5 s on a settled system).
+- **v2 list filter.** `GET /v2/sandboxes?state=running,paused` returns 400 in v0.2.2; one
+  state per query works. This bit the first version of the new `teardown.sh`.
