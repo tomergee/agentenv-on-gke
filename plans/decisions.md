@@ -118,3 +118,14 @@ long-lived gRPC connection to the scheduler's ClusterIP keeps pointing at the ol
 TCP retransmission gives up (about two minutes); a client keepalive or reconnect-on-error
 would fix it upstream. Prototype handling: `tests/smoke.sh` waits up to 300 s
 (`NODES_WAIT`) for the node to be listed and records the wait; AC-2's pass rule says so.
+
+## H1 verified: teardown with a running sandbox takes 28 s (2026-09-23, developer round 2)
+
+First attempt of the new script found no sandboxes because `GET /v2/sandboxes?state=running,paused`
+returns **400** in v0.2.2 (one state per query works); the running sandbox then held the
+runtime pod in its preStop drain and the namespace stayed Terminating past the 600 s wait.
+Fixed by querying `state=running` and `state=paused` separately and by waiting for the
+runtime pod to be deleted (not just the DaemonSet object). Re-run with one running sandbox:
+kill 204, DaemonSet and pod gone, namespace gone, **28 s wall clock**; `scripts/deploy.sh`
+afterwards took 29 s and reused the API key. For comparison the tester measured 172 s and
+301 s with the old namespace-only teardown (O-1).

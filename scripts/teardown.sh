@@ -15,7 +15,7 @@ PORT=${LOCAL_PORT:-18099}
 K() { kubectl --context "$CTX" "$@"; }
 api() { curl -s --max-time 20 -H "X-API-Key: $KEY" "$@"; }
 PF=""
-cleanup() { [[ -n "$PF" ]] && kill "$PF" 2>/dev/null || true; }
+cleanup() { if [[ -n "$PF" ]]; then kill "$PF" 2>/dev/null || true; wait "$PF" 2>/dev/null || true; fi; }
 trap cleanup EXIT
 
 if ! K get namespace "$NS" >/dev/null 2>&1; then
@@ -34,14 +34,23 @@ if K -n "$NS" get svc agentenv-gateway >/dev/null 2>&1 \
     sleep 1
   done
   if [[ $up == 1 ]]; then
+    # v2 list, one state per query (the array parameter is finicky); union the IDs.
     list_ids() {
-      api "http://127.0.0.1:$PORT/v2/sandboxes?state=running,paused" \
-        | python3 -c 'import json,sys
-try:
-  d=json.load(sys.stdin)
-except Exception:
-  d=[]
-print("\n".join(s.get("sandboxID","") for s in (d if isinstance(d,list) else [])))'
+      for st in running paused; do
+        api "http://127.0.0.1:$PORT/v2/sandboxes?state=$st"
+        echo
+      done | python3 -c 'import json,sys
+ids=set()
+for line in sys.stdin:
+  line=line.strip()
+  if not line: continue
+  try:
+    d=json.loads(line)
+  except Exception:
+    continue
+  for s in (d if isinstance(d,list) else []):
+    if s.get("sandboxID"): ids.add(s["sandboxID"])
+print("\n".join(sorted(ids)))'
     }
     ids=$(list_ids | sed '/^$/d')
     if [[ -n "$ids" ]]; then
@@ -53,6 +62,8 @@ print("\n".join(s.get("sandboxID","") for s in (d if isinstance(d,list) else [])
         [[ -z "$(list_ids | sed '/^$/d')" ]] && break
         sleep 1
       done
+      left=$(list_ids | sed '/^$/d' | wc -l | tr -d ' ')
+      [[ "$left" == 0 ]] || echo "WARNING: $left sandbox(es) still listed; the runtime's preStop drain will wait for them (up to 3600 s)" >&2
     else
       echo "no sandboxes to kill"
     fi
@@ -62,8 +73,11 @@ print("\n".join(s.get("sandboxID","") for s in (d if isinstance(d,list) else [])
   cleanup; PF=""
 fi
 
-# 2. Runtime first, while the scheduler is still serving.
-K -n "$NS" delete daemonset agentenv-node --ignore-not-found --wait=true --timeout=900s
+# 2. Runtime first, while the scheduler is still serving. `kubectl delete` returns when the
+# DaemonSet object is gone; wait for its pod as well, which is where the preStop drain and
+# the runtime's shutdown happen.
+K -n "$NS" delete daemonset agentenv-node --ignore-not-found --wait=true --timeout=120s
+K -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=agentenv-node --timeout=900s 2>/dev/null || true
 # 3. Everything else.
 K delete namespace "$NS" --ignore-not-found --wait=true --timeout=600s
 echo "namespace $NS deleted. Left on the runtime node by design: /var/lib/aenv (deps, image"
