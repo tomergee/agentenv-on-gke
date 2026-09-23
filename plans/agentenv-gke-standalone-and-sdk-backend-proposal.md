@@ -575,6 +575,12 @@ laptop, 2026-09-22) **[V-probe]**:
   runtime image and pinned in the prototype; upstream `main` has the same code and no
   issue yet, so this needs an upstream PR (gap 33).
 
+- **Full conversion run:** 500 images in ten parallel Cloud Build shards took about
+  70 minutes; 499 succeeded on the first pass. The one failure was a transient 502 from
+  Artifact Registry's token endpoint during a layer upload, which the converter does not
+  retry; a re-run fixed it. Any bulk pipeline against Artifact Registry needs retries on
+  5xx for both blob and token requests **[V-probe]**.
+
   What is missing on the AgentENV side: in v0.2.2 the accelerate address is set only by
   AgentENV's own experimental peer-to-peer transport, and the generated storage config is
   rewritten at every startup, so pointing it at a Dragonfly peer needs a small upstream

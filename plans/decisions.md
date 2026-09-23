@@ -304,3 +304,13 @@ already running use the earlier image and leave `-src` tags behind). Run
 `scripts/convert-cleanup-staging.sh` once the shards finish to remove them (about 1.2 GB of
 registry storage each).
 
+## Orchestrator: full conversion run outcome (2026-09-23)
+
+All ten shards finished by 17:14 UTC: 499 of 500 converted in about 70 minutes. The one
+failure, `sweb.eval.x86_64.sphinx-doc__sphinx-9673` in shard 3, was transient: Artifact
+Registry's token endpoint (`POST /v2/token`) answered 502 Bad Gateway during a layer upload,
+and the containerd convertor does not retry token fetches, so the image failed after 6 s and
+the shard exited non-zero after finishing the rest. Re-ran shard 3 (`_SHARD=3,_SHARDS=10`;
+build 31fc657a-bf17-41cc-bacc-4079b4facd8b), which skips the 49 already-converted images.
+Lesson for a production pipeline: wrap each conversion in a retry on 5xx from the registry.
+
