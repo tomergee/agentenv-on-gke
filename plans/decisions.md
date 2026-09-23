@@ -341,3 +341,12 @@ N=100: pause median 1.5 s, resume median 3.9 s (max 5.9 s), first command median
 which 1.3 s inside the node (manifest 0.26 s, config 0.49 s when uncached, ublk device 0.68 s,
 then Firecracker spawn/boot/envd), the rest gateway and scheduler overhead.
 
+## Orchestrator: P50/P90 rerun and CPU saturation proof (2026-09-23)
+
+Reran cold create and pause/resume at 1, 10, 100 (docs/concurrency-p50-p90-report.md). Run 1
+and run 2 agree. A one-second /proc/stat sampler in a runtime pod during a 100-burst showed
+8 s at 100 % CPU with PSI up to 52 %: the 8-vCPU nodes saturate when 25 guests boot at once;
+they run 25 idle sandboxes at a few percent CPU and 5 to 10 GB. Start-race failures varied
+0 to 5 per 100 with that starvation. Harness fix: threads that fail before a barrier still
+arrive at it (the first resume-100 attempt of run 2 stalled for two barrier timeouts).
+

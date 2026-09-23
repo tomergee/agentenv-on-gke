@@ -1015,8 +1015,11 @@ instant from distinct converted images, 2 CPU / 2 GB each, across the 4 nested-v
 1 and 10 behave the same (about 2.6 s to running, 3.2 s to first command); 100 serializes on
 per-node CPU at 25 per node (median 8 to 9 s to running, max 10.9 s, first command done for
 all within 11.6 s). 1 to 3 of 100 creates fail with a refused connection on the Firecracker
-API socket during a burst; the runtime has no retry there (gap 34). Details in the prototype
-repository's `docs/concurrency-report.md`.
+API socket during a burst; the runtime has no retry there (gap 34). A one-second CPU sampler
+showed the 8-vCPU node at 100 % for 8 s while 25 guests booted (kernel CPU pressure 52 %),
+so the knee is about 10 simultaneous starts per 8 vCPUs; running 25 idle sandboxes costs a
+few percent CPU. Failures varied 0 to 5 per 100 with that starvation. Run 2 agreed with run 1
+(P50/P90 tables in the prototype repository's `docs/concurrency-p50-p90-report.md`).
 **Pause and resume bursts (same day) [V-probe].** Pausing then resuming the same 1, 10 and
 100 sandboxes at once: at 1 and 10, pause 0.18 s, resume 0.11 to 0.17 s, first command 0.46 to
 0.67 s after resume; at 100 (25 per node), pause median 1.5 s, resume median 3.9 s (max 5.9 s),
