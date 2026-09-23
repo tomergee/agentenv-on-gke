@@ -90,14 +90,18 @@ NODES_WAIT=${NODES_WAIT:-300}
 S_nodes=$(now); NODEID=""
 while :; do
   NODES_JSON=$(api "$GW/nodes")
-  NODEID=$(echo "$NODES_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[0]["id"] if len(d)==1 else "")' 2>/dev/null)
+  # Multi-node: pick the record for the first runtime pod (node ids are pod names).
+  NODEID=$(echo "$NODES_JSON" | NODEPOD="$NODEPOD" python3 -c 'import json,sys,os
+d=json.load(sys.stdin); want=os.environ["NODEPOD"]
+print(next((n["id"] for n in d if n.get("id")==want), ""))' 2>/dev/null)
   [[ -n "$NODEID" ]] && break
   (( $(echo "$(since "$S_nodes") > $NODES_WAIT" | bc) )) && break
   sleep 5
 done
 T_nodes=$(since "$S_nodes")
 DETAIL=$(api "$GW/nodes/$NODEID" | python3 -c 'import json,sys; d=json.load(sys.stdin); m=d.get("metrics",{}); print("status=%s cpu=%s memGB=%s sandboxes=%s" % (d.get("status"), m.get("cpuCount"), round(m.get("memoryTotalBytes",0)/2**30,1), d.get("sandboxCount")))' 2>/dev/null)
-if [[ "$HC" =~ ^20[04]$ && "$NODEID" == "$NODEPOD" && "$DETAIL" == status=ready* ]]; then pass 2 "/health $HC; /nodes -> $NODEID after ${T_nodes}s; $DETAIL"; else fail 2 "health=$HC nodes=$NODEID (waited ${T_nodes}s of ${NODES_WAIT}s) detail=$DETAIL"; fi
+NNODES_LISTED=$(echo "$NODES_JSON" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null)
+if [[ "$HC" =~ ^20[04]$ && "$NODEID" == "$NODEPOD" && "$DETAIL" == status=ready* ]]; then pass 2 "/health $HC; /nodes lists $NNODES_LISTED node(s), $NODEID after ${T_nodes}s; $DETAIL"; else fail 2 "health=$HC nodes=$NODEID of $NNODES_LISTED listed (waited ${T_nodes}s of ${NODES_WAIT}s) detail=$DETAIL"; fi
 
 # AC-3 cold create
 read -r ID CREATE_T < <(create); CREATED+=("$ID")
