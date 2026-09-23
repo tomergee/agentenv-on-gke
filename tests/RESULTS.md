@@ -235,3 +235,30 @@ and 4096 MB: POST 42.3 s (pull 1.2 GB + conversion), running at 42.7 s; guest sa
 3.9 GB RAM, a 63 GB root disk, `/testbed`, Python 3.9.21; command round trip and kill normal.
 Converted footprint on the node: about 3.5 to 4.7 GB per SWE image.
 
+## Lazy loading from pre-converted overlaybd images (2026-09-23)
+
+Pilot images converted by the pipeline in `build/convert/` (38 s each, Cloud Build) into
+`us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/swebench-verified:<instance>`,
+then created on the runtime with the patched image (relative-redirect fix, see
+plans/decisions.md), 2 CPU / 4096 MB:
+
+| Create | Node | POST | Running at |
+|---|---|---|---|
+| astropy-12907 #1 | first node | 4.2 s | 4.6 s |
+| astropy-12907 #2 | second node | 4.6 s | 5.0 s |
+| astropy-12907 #3 | third node | 4.4 s | 4.8 s |
+| astropy-12907 #4 | fourth node | 4.2 s | 4.6 s |
+| django-11099, never seen by any node | | 4.5 s | 4.9 s |
+
+Compared with the standard-image path measured earlier (42 to 52 s per node per image,
+then about 4.5 GB of converted layers on each node), the lazy path costs about 4.5 s on
+every node with no conversion and no per-node copy: the remote-block cache grew by 16 to
+85 MB per node. Runtime logs show "source image is overlaybd-native; skipping blob
+download"; sandboxes landed on all four nodes. First command in a fresh lazy sandbox
+took 15.7 s wall (SDK connect plus first-touch block fetches); `/testbed` and Python 3.9
+present in both images. All sandboxes killed afterwards.
+
+Before the runtime patch the same creates failed in about 3 s with "range request failed
+... relative URL without a base" (Artifact Registry's relative redirect Location), and before
+the native-sidecar change they failed at the token request (no credential file at startup).
+

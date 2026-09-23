@@ -265,3 +265,35 @@ Cluster verification found two runtime problems, fixed in order:
    by `build/runtime/cloudbuild-runtime.yaml` (clone v0.2.2, apply patches, Dockerfile.agentenv).
    Worth an upstream PR.
 
+## Developer: full Verified conversion launched (2026-09-23)
+
+Re-pilot on the patched runtime passed (tests/RESULTS.md, "Lazy loading" section), so the
+full run was launched: 10 async Cloud Build shards, each converting every 10th instance of
+`build/convert/verified-instances.txt` (50 images per shard, sequential, about 38 s each,
+so roughly 35 to 45 minutes per shard if the pilot rate holds).
+
+| Shard | Build |
+|---|---|
+| 0 | `88a7289a-80a1-417c-b948-ecfe1e72b3e3` |
+| 1 | `9bdd61f7-4202-430d-a591-1625c3bd19b3` |
+| 2 | `cb302fbc-91f7-4df3-92f5-525fa55d49ad` |
+| 3 | `efd3e147-921c-4ff3-9c45-afa70dab1ed3` |
+| 4 | `f2975939-fd5c-4f39-bc7e-71f11484cdee` |
+| 5 | `61b88941-41ce-4069-9696-eb041786e8a4` |
+| 6 | `592f0170-61b9-4980-ad62-b433fece4692` |
+| 7 | `6079854d-4a0b-4137-98da-a4ff6170f239` |
+| 8 | `c523fdbd-4e8e-4984-adbb-b9b5989e8314` |
+| 9 | `80351e04-e885-413e-adf6-249a2a8f0002` |
+
+Status: `scripts/convert-status.sh` (converted tags vs 500, build states, first missing).
+Retry: re-run `scripts/convert-launch.sh 10` (or a single shard with
+`gcloud builds submit build/convert --config build/convert/cloudbuild-convert.yaml --substitutions _SHARD=<n>,_SHARDS=10`);
+converted images are skipped, `-src` staging tags are deleted per image by the build SA
+(repoAdmin on `agentenv-images`). Leftover `-src` tags after a failed shard can be removed
+with `gcloud artifacts docker images delete <ref>-src --delete-tags`.
+
+Using the images: `POST /sandboxes-cold` with
+`us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/swebench-verified:sweb.eval.x86_64.<instance>`;
+the runtime resolves them as overlaybd-native and lazy-loads (about 4.5 s to running on any
+node). Requires the patched runtime image now pinned in the overlay.
+
