@@ -213,3 +213,18 @@ warm on a node that has already converted that image. For many distinct task ima
 N nodes this multiplies conversion work and cache footprint by N; image-aware placement or
 pre-converted overlaybd images in the registry would fix it (proposal gaps 6 and 8).
 
+### Re-run with the fixed harness (same image, same day): 10/10 pass
+
+| Timing | Measured | Note |
+|---|---|---|
+| AC-3 create | 50.8 s | Round-robin placed it on the one node that had not converted the image yet |
+| AC-10 second create | 2.33 s | On a node that had converted it earlier |
+| AC-10 third create, concurrent | 2.20 s | Same |
+| Command round trip | 0.45 s | |
+| Pause / resume / fork of 2 | 0.49 s / 0.93 s / 1.54 s | |
+| `/nodes` | 4 nodes listed in 0.4 s | AC-2 now selects the first runtime pod's record |
+
+Conclusion: after a node has converted an image once, create time for the 1.3 GB task image
+is the same as for `ubuntu:22.04` (about 2.3 s). The cost is the first conversion per node
+per image, which round-robin placement spreads across every node.
+
