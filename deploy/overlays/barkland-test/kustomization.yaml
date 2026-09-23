@@ -11,12 +11,15 @@ namespace: agentenv-system
 resources:
   - ../../base
 
-# Pinned by digest (recorded in plans/decisions.md). The tags these digests were resolved
-# from: aenv-server v0.2.2-amd64, agentenv-gateway v0.2.2, agentenv-scheduler v0.2.2.
+# Pinned by digest (recorded in plans/decisions.md). Runtime: our patched build of
+# v0.2.2 (build/runtime: relative-redirect fix needed for lazy loading from Artifact
+# Registry), tag aenv-server:v0.2.2-ar-redirect1 in the agentenv repo; upstream was
+# ghcr.io/kvcache-ai/aenv-server@sha256:7ce67e1f078c461ebe00a88328c190d7cdefd12988d35dbea209a87787e0117b
+# (v0.2.2-amd64). Gateway and scheduler: v0.2.2 built from source.
 images:
   - name: agentenv-runtime
-    newName: ghcr.io/kvcache-ai/aenv-server
-    digest: sha256:7ce67e1f078c461ebe00a88328c190d7cdefd12988d35dbea209a87787e0117b
+    newName: us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/aenv-server
+    digest: sha256:cd2f0d0b285a4f7a16238e2ef805d9163aebcfab0db17fac7307db7add9861ec
   - name: agentenv-gateway
     newName: us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/agentenv-gateway
     digest: sha256:452e3e4a0667f9d40c50bbf7d7a5b828fcb8245eb817f914da837dfc28e039ed
