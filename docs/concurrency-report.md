@@ -147,5 +147,6 @@ warm manifest/config cache; bare-metal nodes to remove the nested-virtualization
 
 Run 2 of both experiments, with P50/P90 tables and the one-second CPU sampling that proves
 the 100-burst saturates the node's 8 vCPUs for about 8 s, is in
-[`concurrency-p50-p90-report.md`](concurrency-p50-p90-report.md).
+[`concurrency-p50-p90-report.md`](concurrency-p50-p90-report.md) (short) and
+[`concurrency-p50-p90-report-detailed.md`](concurrency-p50-p90-report-detailed.md).
 
