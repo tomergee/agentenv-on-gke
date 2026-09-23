@@ -173,3 +173,43 @@ Round-2 observations:
   harness now waits up to 300 s and records the wait (0.4-0.5 s on a settled system).
 - **v2 list filter.** `GET /v2/sandboxes?state=running,paused` returns 400 in v0.2.2; one
   state per query works. This bit the first version of the new `teardown.sh`.
+
+## SWE-rebench task image from the private registry (2026-09-23, 4 runtime nodes)
+
+Image: `us-docker.pkg.dev/gke-ai-eco-dev/hicard/mldataset_nongoogle_swe_rebench/swerebench/sweb.eval.x86_64.0b01001001_1776_spectree-64:latest`
+(standard Docker v2 manifest, 16 layers, 1.32 GB compressed). Pulled by the runtime with
+Workload Identity credentials from the `registry-creds` sidecar (see plans/decisions.md).
+Cluster: 4 runtime nodes on `kvm-pool-c2`, gateway and scheduler on `default-pool`.
+
+| AC | Result | Detail |
+|---|---|---|
+| AC-1 | PASS | 6/6 pods Ready (4 runtime node pod(s)); first node pod agentenv-node-5cs7c on gke-barkland-test-kvm-pool-c2-6b3ad0c5-axvc (kvm-pool-c2) |
+| AC-2 | FAIL | health=204 nodes= (waited 304.715082000s of 300s) detail= |
+| AC-3 | PASS | 201, id=01a0ceaa-d60c-7170-9735-7ea130439cac, running after 52.505692000 s (POST 52.172380000 s) |
+| AC-4 | PASS | SDK exit 0; guest kernel 6.1.175; PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"; marker=marker-1790173701; echo rtt 0.507 s |
+| AC-5 | PASS | 204 in 1.638586000 s; listed paused, not running |
+| AC-6 | PASS | 201 same id; marker intact (marker-1790173701); first read .935577000 s after POST; command ok |
+| AC-7 | PASS | 2 children (01a0ceaa, 01a0ceaa); call .683129000 s, both answering 1.538216000 s; marker inherited; child writes isolated; parent still running |
+| AC-8 | PASS | 3 deletes 204; none listed; GET parent 404 |
+| AC-9 | PASS | all timing rows recorded |
+| AC-10 | PASS | second create running after 62.064364000 s; a third created while the second was running after 58.222023000 s |
+
+AC-2 failed only because this harness version required exactly one runtime node; fixed in
+`b2a2f33` (selects the first runtime pod's record). Everything else passed.
+
+| Timing (SWE image) | Measured | Note |
+|---|---|---|
+| Cold create, first time on a node (pull 1.3 GB + overlaybd conversion) | 52.5 s | POST itself took 52.2 s: the conversion is synchronous in the create call |
+| Second create (AC-10) | 62.1 s | Landed on a different node by round-robin, so it converted again |
+| Third create while the second ran | 58.2 s | Same: another cold node |
+| Command round trip (E2B SDK) | 0.51 s | |
+| Pause | 1.64 s | |
+| Resume, first marker read after POST | 0.94 s | State preserved |
+| Fork into 2, both answering | 1.54 s | Call 0.68 s; writes isolated; parent kept running |
+| Kill | 204 x3 | Parent 404 afterwards |
+
+Finding: with round-robin placement and per-node image conversion, a "warm" create is only
+warm on a node that has already converted that image. For many distinct task images across
+N nodes this multiplies conversion work and cache footprint by N; image-aware placement or
+pre-converted overlaybd images in the registry would fix it (proposal gaps 6 and 8).
+

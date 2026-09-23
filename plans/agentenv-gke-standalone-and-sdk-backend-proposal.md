@@ -17,10 +17,10 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 2 | AgentENV | One shared API key, checked only on nodes; no users, tenancy or quotas | Blocker | One AgentENV cluster per trust domain; an authenticating proxy later | 4.6 |
 | 3 | AgentENV | Paused sandboxes live on node-local disk and are lost when a node is replaced; no migration | High | Maintenance exclusions, autoscaled blue-green upgrades, a pre-drain commit step (not upstream) | 4.9 |
 | 4 | AgentENV + GKE | No autoscaling integration; the cluster autoscaler may remove nodes running only microVMs | High | Fixed-size pool; scale-down-disabled annotation; a custom scaler driven by `GET /nodes` | 4.10 |
-| 5 | AgentENV | Registry credentials are read only at startup | High | VPC-only self-hosted registry, a JSON-key credential, or an upstream credential refresh | 4.6 |
+| 5 | AgentENV | Registry credentials are read only at startup by the overlaybd path; `regctl` (standard OCI pulls) re-reads the Docker config per call | High | **Prototype:** Workload Identity token sidecar refreshing the Docker config works for standard OCI pulls from Artifact Registry; lazy overlaybd reads still need a startup-time credential or an upstream refresh | 4.6, 9 |
 | 6 | AgentENV | Standard images are fully downloaded and converted on every node on first use | High | Batch pipeline that publishes overlaybd-native images | 4.7 |
 | 7 | AgentENV | Single scheduler replica; sandbox-to-node bindings in memory by default. Measured: after a scheduler restart `GET /nodes` is empty for up to ~160 s while sandbox operations keep working | High | Redis binding store (Memorystore) plus query-only scheduler replicas; health checks must tolerate the rebuild window | 4.4, 9 |
-| 8 | AgentENV | Placement ignores load by default (no resource limits; request hints unused) | High | Configure `node_resource_limit` | 4.4 |
+| 8 | AgentENV | Placement ignores load and image locality by default (no resource limits; the create's `images` hint is unused). Measured: with 4 nodes, a second create of a 1.3 GB image took 60 s again on a fresh node | High | Configure `node_resource_limit`; image-aware placement or pre-converted images for many distinct task images | 4.4, 9 |
 | 9 | AgentENV | Create is not idempotent; retries can leak sandboxes | Medium | Tag every sandbox with run metadata; reap by metadata | 5.3 |
 | 10 | AgentENV | Fork keeps all children on the source's node and rejects sources with volumes | Medium | Size fork groups to one node; avoid volumes on fork sources | 3 |
 | 11 | AgentENV | Template-based creates take no per-sandbox CPU or memory | Medium | One template per shape, or cold creates from an image | 5.4 |
@@ -42,6 +42,7 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 27 | AgentENV | No central metadata store: sandbox lists fan out to every node and fail if one node fails; no history or change stream | High | Metadata tagging, gateway access logs, an external inventory and an orphan reconciler | 4.13 |
 | 28 | AgentENV + Cloud Storage | **Confirmed:** Cloud Storage's S3-compatible API silently ignores `If-Match` / `If-None-Match` on PUT **[V-probe]**, so AgentENV's create-if-absent and optimistic-update guards on snapshot and volume records are no-ops there (last writer wins, no error); alias bindings are best-effort by design | Blocker for concurrent writers | Native GCS backend upstream (`x-goog-if-generation-match` works), or Filestore `posix_fs`, or serialize catalog writers | 4.13 |
 | 29 | AgentENV | Runtime downloads Firecracker, kernel, tools and overlaybd binaries from the internet at every pod start, with no retry; fresh nodes crash-loop until DNS is up **[V-probe]** | Medium | Private mirror of the dependency manifest, or bake dependencies into the runtime image; egress to GitHub and ghcr required otherwise | 9 |
+| 31 | AgentENV | API key rotation: the gateway injects its own copy of the key toward nodes and reads it only at startup; rotating the Secret without restarting the gateway breaks every call; no dual-key window **[V-probe]** | Medium | Restart gateway and runtime pods on rotation (the repo's deploy script does); upstream: reload on change or accept two keys during rotation | 4.6, 9 |
 | 30 | AgentENV | API skew between releases and `main`: v0.2.2 lacks `/v2/sandboxes/{id}/connect` (breaks the E2B SDK's connect), `/proxy` prefix returns 404, `?state=a,b` returns 400 **[V-probe]** | Medium | Pin the API version in the SDK backend; feature-detect; track upstream releases | 5.2, 9 |
 
 ---
@@ -887,6 +888,32 @@ under the hostPath.
 6. **Teardown must kill sandboxes first.** The DaemonSet's preStop waits for running
    sandboxes to drain for up to 3600 s; a plain namespace delete stalled for minutes. The
    repo's teardown script kills sandboxes, removes the runtime, then the namespace (28 s).
+
+**Task images from a private registry (added later on 2026-09-23).** The runtime pod's
+Kubernetes ServiceAccount was granted `roles/artifactregistry.reader` on the task-image
+repository, and a sidecar refreshes a Docker config with the Workload Identity access token
+every 15 minutes; `regctl`, which AgentENV uses for standard OCI pulls, reads that file on
+every call, so the startup-only credential loading (gap 5) does not bite for this path. A
+1.3 GB, 16-layer SWE-rebench image then ran end to end:
+
+| Operation, SWE-rebench image | Measured |
+|---|---|
+| Cold create, first time on a node (pull + conversion, synchronous in the POST) | 52.5 s |
+| Create on another node that had not converted it (round-robin) | 58 to 62 s |
+| Command round trip | 0.5 s |
+| Pause / resume / fork of 2 | 1.6 s / 0.9 s / 1.5 s |
+
+7. **Per-node conversion multiplies cold starts.** Placement is round-robin and conversion
+   is per node, so with N runtime nodes each distinct image is pulled and converted up to N
+   times and occupies N caches; "warm" only holds on a node that has already seen the
+   image. For thousands of task images this is the dominant cost. Fixes: image-aware
+   placement (the scheduler receives an `images` hint but ignores it, gap 8) or a
+   pre-conversion pipeline publishing overlaybd images so nodes lazy-load blocks instead of
+   converting (gap 6).
+8. **API key rotation requires restarting the gateway and every runtime pod.** The gateway
+   injects its own copy of the key toward nodes and reads it only at startup; when the
+   Secret changed and only the runtime pods restarted, every request failed with 401. There
+   is no hot reload and no dual-key window. Gap 31.
 
 **Still unverified after the prototype:** bare-metal nodes, a shared snapshot repository on
 Cloud Storage or Filestore (and the conditional-write gap 28), templates and snapshot

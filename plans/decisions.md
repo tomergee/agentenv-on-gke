@@ -181,3 +181,14 @@ any deployment: rotating the API key means restarting the gateway and every runt
 there is no hot reload and no dual-key window. `tests/smoke.sh` AC-1 now accepts pods with
 more than one container (the credential sidecar) and any number of runtime nodes.
 \n
+
+## Orchestrator: SWE task image results and the per-node conversion effect (2026-09-23)
+
+The private `hicard` SWE-rebench image ran end to end (tests/RESULTS.md, last section): cold
+create 52.5 s for a 1.3 GB image, then commands, pause, resume, fork and kill all normal. The
+second and third creates took about 60 s each because the scheduler's round-robin placed
+them on nodes that had not converted the image yet. Conversion is per node and synchronous
+inside the create call. Decision: accepted for the prototype; recorded as a design input for
+the proposal (image-aware placement, or an overlaybd conversion pipeline so nodes lazy-load
+instead of converting).
+
