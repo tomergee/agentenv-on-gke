@@ -19,28 +19,30 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 4 | AgentENV + GKE | No autoscaling integration; the cluster autoscaler may remove nodes running only microVMs | High | Fixed-size pool; scale-down-disabled annotation; a custom scaler driven by `GET /nodes` | 4.10 |
 | 5 | AgentENV | Registry credentials are read only at startup | High | VPC-only self-hosted registry, a JSON-key credential, or an upstream credential refresh | 4.6 |
 | 6 | AgentENV | Standard images are fully downloaded and converted on every node on first use | High | Batch pipeline that publishes overlaybd-native images | 4.7 |
-| 7 | AgentENV | Single scheduler replica; sandbox-to-node bindings in memory by default | High | Redis binding store (Memorystore) plus query-only scheduler replicas | 4.4 |
+| 7 | AgentENV | Single scheduler replica; sandbox-to-node bindings in memory by default. Measured: after a scheduler restart `GET /nodes` is empty for up to ~160 s while sandbox operations keep working | High | Redis binding store (Memorystore) plus query-only scheduler replicas; health checks must tolerate the rebuild window | 4.4, 9 |
 | 8 | AgentENV | Placement ignores load by default (no resource limits; request hints unused) | High | Configure `node_resource_limit` | 4.4 |
 | 9 | AgentENV | Create is not idempotent; retries can leak sandboxes | Medium | Tag every sandbox with run metadata; reap by metadata | 5.3 |
 | 10 | AgentENV | Fork keeps all children on the source's node and rejects sources with volumes | Medium | Size fork groups to one node; avoid volumes on fork sources | 3 |
 | 11 | AgentENV | Template-based creates take no per-sandbox CPU or memory | Medium | One template per shape, or cold creates from an image | 5.4 |
 | 12 | AgentENV | Sandboxes can't reach any private range, including cluster services and internal model endpoints | Medium | Public or allowlisted endpoints; a reviewed carve-out in `always_denied_cidrs` | 4.5 |
 | 13 | AgentENV + GKE | Internal address pools `10.11.0.0/16` and `10.12.0.0/16` can collide with GKE ranges | Medium | Choose non-overlapping GKE ranges or move the pools (configurable) | 4.5 |
-| 14 | AgentENV | Host prep is manual (ublk device limit, sysctls); the DaemonSet targets every Linux node | Medium | Init container for host prep; node selector and taint for a dedicated pool | 4.3, 4.4 |
+| 14 | AgentENV | Host prep is manual (ublk device limit, sysctls); the DaemonSet targets every Linux node | Medium | **Done in the prototype:** init container reloads `ublk_drv` at 4096 (kernel default measured at 64) and applies sysctls; node selector pins the pool | 4.3, 4.4, 9 |
 | 15 | AgentENV | Privileged DaemonSet with host `/dev`; unauthenticated metrics; no tracing | Medium | Security review; break-glass exec; NetworkPolicy on metrics | 4.8, 4.11 |
 | 16 | GKE | Nested virtualization costs 10% or more CPU (more for I/O), limits machine series, and rules out node auto-provisioning | High | Prefer bare metal (section 4.2); benchmark against nested | 4.2 |
 | 17 | GKE | Bare metal on GKE: only C3 and C4A are confirmed, and neither has local SSD; C4 bare metal with local SSD is unconfirmed; no live migration; KVM, ublk and io_uring untested on bare-metal nodes | High | Test GKE acceptance of `c4-standard-288-lssd-metal`; else C3 metal with a Hyperdisk cache, or nested VMs with local SSD | 4.2, 7 |
 | 18 | GKE | Local SSD data is lost on upgrade or repair; pool storage config is immutable | Medium | Treat node disks as caches; keep durable state in the snapshot repository | 4.2, 4.9 |
-| 19 | GKE | Surge upgrades, auto-repair and scale-down cap graceful drain at one hour | Medium | Autoscaled blue-green (up to 24 hours) and maintenance windows | 4.9 |
+| 19 | GKE | Surge upgrades, auto-repair and scale-down cap graceful drain at one hour. Measured: runtime shutdown blocks ~126 s if the scheduler is already gone | Medium | Autoscaled blue-green (up to 24 hours) and maintenance windows; drain runtime pods before the control plane | 4.9, 9 |
 | 20 | Artifact Registry | No lazy-loading format; bytes flow through its own front end; quota of 60,000 requests/min per region; short-lived tokens; download URLs act as capabilities; Referrers API unverified | High | Conversion pipeline; quota increase or a self-hosted registry backed by Cloud Storage; in-region load test | 4.12 |
 | 21 | Cloud Storage | S3-compatible API lacks request preconditions and multipart MD5s; needs HMAC keys | Medium | Verify AgentENV's OpenDAL usage; HMAC key in Secret Manager; or native GCS support upstream | 4.6, 4.7 |
 | 22 | SDKs | No backend abstraction; creation is hard-wired to SandboxClaims; the RL SDK executes through pod exec | High | Backend protocol in the Python and RL SDKs, Kubernetes as default | 5.1, 5.2, 5.3 |
 | 23 | SDKs | Warm pools, pod identity, pod-level parameters and Kubernetes-only adapters don't map | Medium | Documented as unsupported or no-ops on the AgentENV backend | 5.4 |
 | 24 | SDKs | The E2B SDK has no fork call | Medium | Raw HTTP call for fork in the backend | 3, 5.2 |
 | 25 | Project | A non-Kubernetes backend may not be accepted in a Kubernetes SIG SDK | High | Propose the abstraction upstream; ship the AgentENV backend out of tree | 5.6 |
-| 26 | AgentENV | No RBAC: one key grants every operation; no per-user identity or audit | Blocker | Kubernetes RBAC around the deployment; an authenticating proxy with roles and metadata ownership, or one cluster per team | 4.14 |
+| 26 | AgentENV | No RBAC: one key grants every operation; no per-user identity or audit. Measured: the key alone also reaches envd in cold-created sandboxes without `secure` | Blocker | Kubernetes RBAC around the deployment; an authenticating proxy with roles and metadata ownership, or one cluster per team | 4.14 |
 | 27 | AgentENV | No central metadata store: sandbox lists fan out to every node and fail if one node fails; no history or change stream | High | Metadata tagging, gateway access logs, an external inventory and an orphan reconciler | 4.13 |
 | 28 | AgentENV + Cloud Storage | **Confirmed:** Cloud Storage's S3-compatible API silently ignores `If-Match` / `If-None-Match` on PUT **[V-probe]**, so AgentENV's create-if-absent and optimistic-update guards on snapshot and volume records are no-ops there (last writer wins, no error); alias bindings are best-effort by design | Blocker for concurrent writers | Native GCS backend upstream (`x-goog-if-generation-match` works), or Filestore `posix_fs`, or serialize catalog writers | 4.13 |
+| 29 | AgentENV | Runtime downloads Firecracker, kernel, tools and overlaybd binaries from the internet at every pod start, with no retry; fresh nodes crash-loop until DNS is up **[V-probe]** | Medium | Private mirror of the dependency manifest, or bake dependencies into the runtime image; egress to GitHub and ghcr required otherwise | 9 |
+| 30 | AgentENV | API skew between releases and `main`: v0.2.2 lacks `/v2/sandboxes/{id}/connect` (breaks the E2B SDK's connect), `/proxy` prefix returns 404, `?state=a,b` returns 400 **[V-probe]** | Medium | Pin the API version in the SDK backend; feature-detect; track upstream releases | 5.2, 9 |
 
 ---
 
@@ -802,9 +804,9 @@ Hands-on checks before committing:
 4. Whether the autoscaler removes nodes whose only load is the DaemonSet.
 5. Whether nested-virt nodes live-migrate with running microVMs, and whether guests survive.
 6. Gateway timeouts for long exec and WebSocket streams.
-7. The actual `ublks_max` default and ublk devices used per sandbox.
+7. ~~The actual `ublks_max` default~~ **Done:** the kernel default on COS 6.12 is 64; the init container sets 4096. Devices per sandbox not yet counted.
 8. Registry authentication: AgentENV with Artifact Registry credentials over a multi-hour run, and with a self-hosted registry.
-9. No routing breakage with the chosen GKE ranges next to AgentENV's internal pools.
+9. ~~No routing breakage with the chosen GKE ranges next to AgentENV's internal pools.~~ **Done:** one and four runtime nodes, sandboxes reachable and placed round-robin.
 10. ~~Cloud Storage through the S3-compatible API honors `If-Match` and `If-None-Match` on ordinary writes~~ **Done, negative result:** it ignores them (section 4.13). Remaining: repeat with HMAC SigV4 auth, and decide between a native-GCS backend, Filestore, or serialized writers.
 
 ## 8. Risks and open questions
@@ -819,7 +821,79 @@ Hands-on checks before committing:
 8. **Registry credentials are loaded only at startup**, which conflicts with short-lived Artifact Registry tokens (section 4.6).
 9. **Project maturity.** AgentENV is young (P2P is marked experimental; docs lag the code, for example on the Redis binding store). Pin a version and track upstream.
 
-## 9. Sources
+## 9. Prototype results (barkland-test, 2026-09-23)
+
+A working deployment now exists; see the repository `tomergee/agentenv-on-gke`
+(`deploy/`, `scripts/`, `tests/RESULTS.md`, `review/findings.md`, `plans/decisions.md`).
+Everything in this section is **[V-probe]** unless marked otherwise.
+
+**What was built.** AgentENV v0.2.2 on GKE 1.35.8: upstream `aenv-server:v0.2.2-amd64` as
+the runtime image on a privileged DaemonSet, gateway and scheduler images built with Cloud
+Build into Artifact Registry (upstream publishes neither; `--build-arg TARGETARCH=amd64` is
+required), a kustomize overlay with a host-prep init container, Secrets created by a deploy
+script, control plane pinned to the default pool, runtime on a nested-virtualization pool
+of `c2-standard-8` nodes (Container-Optimized OS, kernel 6.12, 100 GB pd-balanced boot
+disk, no local SSD). Scaled from one to four runtime nodes at the end; new nodes joined
+through the DaemonSet and EndpointSlice discovery with no configuration change.
+
+**All 13 acceptance criteria pass** (create, command via the E2B SDK, pause, resume with
+state preserved, fork into two, kill, redeploy, teardown, blast radius). Timings on nested
+virtualization, from the client through the gateway:
+
+| Operation | Measured |
+|---|---|
+| Cold create, image never seen on the node (pull + overlaybd conversion) | 5.4 s (7.3 s on a brand-new node) |
+| Create, image already converted | 2.4 s |
+| Command round trip (E2B SDK, envd process API) | 0.3 s |
+| Pause | 0.4 s |
+| Resume | 0.85 s |
+| Fork into 2 children, both answering | 1.3 s |
+| Kill | 0.4 s |
+| Placement of 8 creates across 4 nodes | 2 per node (round-robin) |
+
+These are cold-create and in-node pause/resume paths; upstream's sub-50 ms figure is for
+resume from a committed snapshot template, which the prototype did not exercise.
+
+**Confirmed on GKE.** COS nodes work: `/dev/kvm`, io_uring, `ublk_drv` (kernel default
+`ublks_max` was 64; the init container reloads it at 4096 when no devices are in use),
+iptables and network namespaces inside the privileged pod, image pulls from public
+registries, envd reachable through the gateway with `e2b-sandbox-id` / `e2b-sandbox-port`
+headers. Requests without the API key get 401; `/health` is unauthenticated by design and
+returns 204. Node disk after all tests: about 11 GB used, about 530 MB of persistent state
+under the hostPath.
+
+**New findings (added to the gaps table as rows 29-30, and to existing rows):**
+1. **Startup downloads from the internet.** On each fresh node the runtime downloads
+   Firecracker, the guest kernel, the tools drive and overlaybd tools from GitHub and ghcr
+   at pod start. On two of three new nodes DNS was not ready yet, the download failed, the
+   container exited and Kubernetes restarted it; it succeeded on the retry. No retry inside
+   the runtime; a private mirror or baked-in dependencies would remove the dependency on
+   internet egress at boot.
+2. **Shutdown ordering.** With the scheduler already gone, runtime shutdown blocks about
+   126 s on an in-flight heartbeat RPC before continuing; with the scheduler up it takes
+   2 s. A namespace delete hits this every time. Relevant to node drains during upgrades
+   (gap 19): drain runtime pods before the control plane, or fix the timeout upstream.
+3. **Node visibility after a scheduler restart.** `GET /nodes` returns an empty list for up
+   to about 160 s after the scheduler restarts while creates and commands keep working,
+   because heartbeat records are rebuilt. Health checks that read `/nodes` must tolerate it.
+4. **API version skew.** v0.2.2 has `/sandboxes/{id}/resume` and `/connect` but not the
+   `/v2/sandboxes/{id}/connect` that upstream `main` and the E2B SDK's `Sandbox.connect`
+   use; the `/proxy` path prefix returns 404 (header routing works); `?state=a,b` returns
+   400 (one state per query). The SDK backend (section 5) must target a pinned API version
+   or feature-detect.
+5. **envd reachable with the API key alone** for cold creates that don't set `secure`;
+   the per-sandbox access token is not required then. Anyone holding the shared key can run
+   commands in any such sandbox. Strengthens gaps 2 and 26.
+6. **Teardown must kill sandboxes first.** The DaemonSet's preStop waits for running
+   sandboxes to drain for up to 3600 s; a plain namespace delete stalled for minutes. The
+   repo's teardown script kills sandboxes, removes the runtime, then the namespace (28 s).
+
+**Still unverified after the prototype:** bare-metal nodes, a shared snapshot repository on
+Cloud Storage or Filestore (and the conditional-write gap 28), templates and snapshot
+resume across nodes, HMAC auth, autoscaler behavior, live migration with running microVMs,
+gateway timeouts for long streams, registry authentication over a multi-hour run.
+
+## 10. Sources
 
 AgentENV (commit `2f48c9c`): `src/api/openapi.yml`, `src/api/proxy.rs`, `src/api/impls/auth.rs`,
 `src/sandbox/access.rs`, `src/orchestrator/service.rs`, `services/shared/config/config.go`,

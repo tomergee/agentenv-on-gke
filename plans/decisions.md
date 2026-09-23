@@ -129,3 +129,17 @@ runtime pod to be deleted (not just the DaemonSet object). Re-run with one runni
 kill 204, DaemonSet and pod gone, namespace gone, **28 s wall clock**; `scripts/deploy.sh`
 afterwards took 29 s and reused the API key. For comparison the tester measured 172 s and
 301 s with the old namespace-only teardown (O-1).
+
+## Orchestrator: scaled the runtime pool to 4 nodes (2026-09-23, at Tomer's request)
+
+`gcloud container clusters resize barkland-test --node-pool kvm-pool-c2 --num-nodes 4`. The
+DaemonSet placed a runtime pod on each new node; the init container loaded `ublk_drv` at
+4096 on the fresh hosts; the scheduler discovered all four through the headless Service.
+Eight cold creates landed two per node. Two new runtime pods restarted once or twice before
+becoming Ready: their startup dependency download from GitHub failed with a DNS error before
+node DNS was up (see proposal section 9, finding 1). Caveats for multi-node testing: no
+shared snapshot repository, so templates and committed snapshots are per node; pause,
+resume and fork stay on the owning node; cold creates work everywhere. The system is left
+running for manual testing. To return to one node:
+`gcloud container clusters resize barkland-test --node-pool kvm-pool-c2 --num-nodes 1 --zone us-central1-a --project gke-ai-eco-dev`.
+
