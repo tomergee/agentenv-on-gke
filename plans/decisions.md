@@ -34,3 +34,22 @@ The orchestrator created the Docker repository `us-central1-docker.pkg.dev/gke-a
 ## Orchestrator: API paths corrected for v0.2.2
 
 The proposal was written against upstream `main` (2f48c9c), which has `POST /v2/sandboxes/{id}/connect`. Tag v0.2.2 only has `/sandboxes/{id}/resume` and `/sandboxes/{id}/connect`, and its cold-create `timeout` defaults to 15 s. The acceptance criteria and test plan use the v0.2.2 paths and pass `timeout` explicitly.
+
+## Tester: node state left behind by teardown, and how to clear it (2026-09-23)
+
+`scripts/teardown.sh` deletes namespace `agentenv-system` only. Inspected with a temporary
+`kubectl debug node/gke-barkland-test-kvm-pool-c2-6b3ad0c5-axvc --profile=sysadmin` pod
+(deleted afterwards) right after a teardown:
+
+| Leftover | Size / state | Clear with |
+|---|---|---|
+| `/var/lib/aenv/env` (runtime deps: Firecracker, guest kernel, tools drive, overlaybd tools, regctl; image cache with the converted `ubuntu:22.04` and `debian:12`; snapshot store; persisted-sandboxes; the auto-generated access-token seed) | 530 MB after two images | `kubectl debug node/<node> --profile=sysadmin --image=busybox -- rm -rf /host/var/lib/aenv` (then delete the debug pod). Recreating the node pool also clears it. |
+| `/var/lib/aenv/config` (rendered runtime config) | 4 KB | same |
+| `ublk_drv` kernel module, loaded with `ublks_max=4096` by the init container; `/dev/ublk-control` | loaded, no devices in use | `modprobe -r ublk_drv` from a sysadmin debug pod via `chroot /host`; a node reboot also clears it |
+| Host sysctls applied by the init container | not persisted on COS (read-only `/etc`); lost on reboot | nothing to do |
+
+Node disk after teardown: 10.4 GB of 94 GB used (the pre-prototype baseline was about 10 GB).
+
+Observation: the runtime pod takes 2 to 5 minutes to leave `Terminating` with zero
+sandboxes (172 s and 301 s measured; gateway and scheduler pods are gone within 10 s). No
+`FailedPreStopHook` event was recorded. Reported to the developer in `tests/RESULTS.md`.
