@@ -262,3 +262,22 @@ Before the runtime patch the same creates failed in about 3 s with "range reques
 ... relative URL without a base" (Artifact Registry's relative redirect Location), and before
 the native-sidecar change they failed at the token request (no credential file at startup).
 
+## Sweep: all 500 SWE-bench Verified images, pre-converted (2026-09-23)
+
+`tests/sweep.sh`, 8 in parallel across the 4 nodes, 2 CPU / 4096 MB, one command per sandbox
+(`test -d /testbed; python --version`), then kill. Results in `tests/sweep-results.csv` and
+`tests/sweep-summary.md`.
+
+| | Value |
+|---|---|
+| Passed | **500 / 500** (one transient connection error on the first pass, passed on retry) |
+| Create to running | p50 3.6 s, p90 4.0 s, p99 4.6 s, max 9.0 s |
+| First command (E2B SDK) | p50 1.1 s, p90 2.7 s, max 12.2 s |
+| Create + command | p50 4.75 s, max 15.4 s |
+| Wall clock for the whole set | about 8 minutes |
+| Guest Python versions seen | 3.9 (241), 3.6 (140), 3.11 (52), 3.8 (42), 3.10 (22), 3.5 (2) |
+
+Compared with on-node conversion of the same images (42 to 52 s per image per node and about
+4.5 GB of disk each), every image now starts in under 5 s on any node with tens of megabytes
+of cached blocks.
+

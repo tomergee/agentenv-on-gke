@@ -314,3 +314,11 @@ the shard exited non-zero after finishing the rest. Re-ran shard 3 (`_SHARD=3,_S
 build 31fc657a-bf17-41cc-bacc-4079b4facd8b), which skips the 49 already-converted images.
 Lesson for a production pipeline: wrap each conversion in a retry on 5xx from the registry.
 
+## Orchestrator: full sweep of the converted set (2026-09-23)
+
+Shard 3's re-run succeeded, so all 500 images are converted and the 497 staging copies were
+deleted. The sweep (`tests/sweep.sh`, 8 parallel) then ran every image once: 500 / 500 pass,
+create p50 3.6 s, first command p50 1.1 s, about 8 minutes for the set. One first-pass
+`create_failed` with HTTP 000 (a dropped connection on the client side) passed on retry.
+Sandboxes were killed as they finished; none left running.
+

@@ -1002,6 +1002,13 @@ overlaybd in a regional repository, a create of an image no node has seen takes 
 footprint drops from about 4.5 GB to tens of megabytes of cached blocks. Conversion costs
 about 40 s per image once, in Cloud Build.
 
+**Whole-set sweep (2026-09-23) [V-probe].** After conversion, every one of the 500 SWE-bench
+Verified images was created once (2 CPU / 4 GB), given one command, and killed, 8 at a time
+across 4 nested-virtualization nodes: **500 of 500 passed**; create to running p50 3.6 s,
+p90 4.0 s, max 9.0 s; first command p50 1.1 s; the whole set took about 8 minutes. This is
+the density-and-latency claim tested against the real task-image catalog rather than a
+sample.
+
 **Still unverified after the prototype:** bare-metal nodes, a shared snapshot repository on
 Cloud Storage or Filestore (and the conditional-write gap 28), templates and snapshot
 resume across nodes, HMAC auth, autoscaler behavior, live migration with running microVMs,
