@@ -27,7 +27,7 @@ process; restart it if the gateway pod restarts):
 export KEY=$(kubectl --context $KCTX -n agentenv-system get secret agentenv-auth -o go-template='{{index .data "AENV_API_KEY" | base64decode}}')
 kubectl --context $KCTX -n agentenv-system port-forward svc/agentenv-gateway 8080:8080 >/tmp/pf.log 2>&1 &
 export GW=http://127.0.0.1:8080
-curl -s -o /dev/null -w '%{http_code}\n' $GW/health          # expect 200
+curl -s -o /dev/null -w '%{http_code}\n' $GW/health          # expect 204 (No Content)
 ```
 
 Command execution inside sandboxes. Preferred: the official E2B Python SDK, which AgentENV
@@ -45,16 +45,16 @@ sandbox's `envdAccessToken`:
 
 ```bash
 ENVD=(-H "X-API-Key: $KEY" -H "X-Access-Token: $TOK" -H "e2b-sandbox-id: $ID" -H "e2b-sandbox-port: 49983")
-curl -s "${ENVD[@]}" $GW/proxy/health                                        # 200
+curl -s -o /dev/null -w '%{http_code}\n' "${ENVD[@]}" $GW/health           # 204 from envd
 curl -s "${ENVD[@]}" -X POST -H 'Content-Type: application/octet-stream' \
-  --data-binary 'hello' "$GW/proxy/files?path=/root/marker.txt"             # write
-curl -s "${ENVD[@]}" "$GW/proxy/files?path=/root/marker.txt"                 # read back
+  --data-binary 'hello' "$GW/files?path=/root/marker.txt"                   # write
+curl -s "${ENVD[@]}" "$GW/files?path=/root/marker.txt"                       # read back
 ```
 
 The `/files` endpoints prove the guest is alive and preserve state across pause/resume.
 Running an arbitrary command over curl needs envd's Connect-RPC `process.Process/Start`
 stream, which is awkward from curl; use the SDK for commands, and if the SDK is unusable,
-record AC-4 as passed with the file round-trip plus `/proxy/health`, and say so. The
+record AC-4 as passed with the file round-trip plus envd `/health`, and say so. The
 `aenv` CLI (`scripts/install-cli.sh` in the AgentENV repo, macOS arm64 supported) is a
 third option: `aenv auth` with the port-forward URL and key, then `aenv exec <id> <cmd>`.
 
@@ -91,8 +91,9 @@ t() { local s=$(date +%s.%N); "$@"; local e=$(date +%s.%N); echo "elapsed=$(echo
    response with tokens truncated to 6 characters, elapsed seconds.
 4. On failure or a wait over 10 minutes: `K logs ds/agentenv-node --tail=200`,
    `K describe pod -l app.kubernetes.io/name=agentenv-node | tail -40`, and node disk:
-   `kubectl --context $KCTX debug node/<node> -it --image=busybox -- df -h /host/var/lib/aenv`
-   (read-only inspection; delete the debug pod afterwards).
+   `K exec ds/agentenv-node -c agentenv -- sh -c 'df -h /workspace; du -sh /workspace/env/*'`
+   (the runtime pod mounts the node's `/var/lib/aenv` at `/workspace`; never use
+   `kubectl debug node/...`, which creates a privileged pod outside `agentenv-system`).
 
 ## 3. Command execution (AC-4)
 
@@ -201,8 +202,8 @@ kubectl --context $KCTX get clusterrole,clusterrolebinding 2>/dev/null | grep -i
   `K logs deploy/agentenv-scheduler --tail=100`; check `GET /nodes` is non-empty (the
   scheduler discovers nodes through the headless Service's EndpointSlices, so the node
   pod must be Ready).
-- Create hangs in conversion: node disk pressure (`df` on `/var/lib/aenv` via a debug
-  pod) or slow pulls from `docker.io`.
+- Create hangs in conversion: node disk pressure (`df -h /workspace` via `kubectl exec` into the runtime
+  pod).
 - Command execution fails but the sandbox is running: check that you send both
   `X-API-Key` and `X-Access-Token`, and the correct sandbox port (49983 for envd).
 - Resume fails with 409: the sandbox was already running or already killed; check state.
@@ -211,5 +212,5 @@ kubectl --context $KCTX get clusterrole,clusterrolebinding 2>/dev/null | grep -i
 ## Cleanup
 
 Kill every sandbox you created (`GET /v2/sandboxes` must be empty), stop the port-forward,
-remove `/tmp/e2b-venv`, delete any `kubectl debug` pods you started, and leave the
+remove `/tmp/e2b-venv` (do not create `kubectl debug` pods at any point), and leave the
 deployment up for the reviewer unless the orchestrator asks for teardown.

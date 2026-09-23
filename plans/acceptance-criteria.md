@@ -48,7 +48,7 @@ The API paths are those of AgentENV v0.2.2 (`src/api/openapi.yml`). There is no
   - `curl -s -o /dev/null -w '%{http_code}\n' $GW/health`
   - `curl -s $AUTH $GW/nodes`
   - `curl -s $AUTH $GW/nodes/<nodeID>`
-- **Expected:** `/health` returns 200. `/nodes` returns a JSON array with exactly one node
+- **Expected:** `/health` returns 204 (No Content). `/nodes` returns a JSON array with exactly one node
   whose ID is the runtime pod name (`AENV_NODE_ID` is the pod name). `/nodes/<id>`
   returns the node detail with CPU and memory figures and a sandbox count of 0.
 - **Pass rule:** all three responses as expected; `/nodes` must not be empty.
@@ -84,16 +84,17 @@ The API paths are those of AgentENV v0.2.2 (`src/api/openapi.yml`). There is no
   ```
 - **Fallback (curl, envd HTTP through the proxy):**
   ```
-  curl -s $AUTH -H "X-Access-Token: $TOK" -H "e2b-sandbox-id: $ID" -H "e2b-sandbox-port: 49983" $GW/proxy/health
+  curl -s $AUTH -H "X-Access-Token: $TOK" -H "e2b-sandbox-id: $ID" -H "e2b-sandbox-port: 49983" -o /dev/null -w '%{http_code}\n' $GW/health
   curl -s $AUTH -H "X-Access-Token: $TOK" -H "e2b-sandbox-id: $ID" -H "e2b-sandbox-port: 49983" \
     -X POST -H 'Content-Type: application/octet-stream' --data-binary 'hello-from-agentenv' \
-    "$GW/proxy/files?path=/root/marker.txt"
+    "$GW/files?path=/root/marker.txt"
   curl -s $AUTH -H "X-Access-Token: $TOK" -H "e2b-sandbox-id: $ID" -H "e2b-sandbox-port: 49983" \
-    "$GW/proxy/files?path=/root/marker.txt"
+    "$GW/files?path=/root/marker.txt"
   ```
 - **Expected:** exit code 0 and `hello-from-agentenv` in stdout, plus a kernel version
   line (the guest kernel, expected `6.1.x`, not the node's `6.12.94`). With the fallback,
-  `/proxy/health` returns 200 and the file round-trips.
+  envd `/health` returns 204 and the file round-trips. (v0.2.2 does not serve the
+  `/proxy` path prefix; route with the headers and the original path.)
 - **Pass rule:** either path succeeds. Record the round-trip time of one `echo` command.
 - **Evidence:** the output. Note which path was used.
 

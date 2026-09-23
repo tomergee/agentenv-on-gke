@@ -14,3 +14,22 @@ and start latency.
 
 Prototype target: cluster `barkland-test` (project `gke-ai-eco-dev`, `us-central1-a`),
 node pool `kvm-pool-c2` (nested virtualization, COS, kernel 6.12).
+
+## Run it
+
+```bash
+scripts/build-images.sh      # once: gateway + scheduler via Cloud Build into Artifact Registry
+scripts/deploy.sh            # creates the Secrets, applies deploy/overlays/barkland-test, waits
+KEY=$(scripts/get-api-key.sh)
+scripts/port-forward.sh &    # gateway on http://127.0.0.1:8080 (no TLS or ingress by design)
+curl -s -o /dev/null -w '%{http_code}\n' -H "X-API-Key: $KEY" http://127.0.0.1:8080/health   # 204
+tests/smoke.sh               # AC-1..AC-10 against the live system (see tests/README.md)
+scripts/teardown.sh          # kills sandboxes, removes the namespace (node state stays)
+scripts/clear-node-state.sh  # optional: wipe /var/lib/aenv and unload ublk_drv on the node
+```
+
+- Accepted limitations and the acceptance criteria: `plans/execution-plan.md`,
+  `plans/acceptance-criteria.md`; the test procedure: `plans/test-plan.md`; results:
+  `tests/RESULTS.md`; review: `review/findings.md`; deviations: `plans/decisions.md`.
+- `kubectl kustomize deploy/overlays/barkland-test` renders without secrets; the two
+  Secrets are created by `scripts/deploy.sh` from the gitignored `.secrets/` directory.
