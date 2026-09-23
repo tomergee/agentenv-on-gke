@@ -26,3 +26,11 @@ Append-only. Each entry: date, who, what, why.
   `net.ipv4.neigh.default.gc_thresh*: unable to read` because those sysctls are not visible in
   the pod's network namespace; the init container sets them on the host, which is what matters.
   Two `heartbeat rpc failed` warnings appear before the scheduler is reachable, then clear.
+
+## Orchestrator: Artifact Registry repository created (2026-09-23)
+
+The orchestrator created the Docker repository `us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv` to hold the gateway and scheduler images. This is the one project-level change outside namespace `agentenv-system`; AC-13 allows it because it is recorded here. Teardown of the prototype does not delete it.
+
+## Orchestrator: API paths corrected for v0.2.2
+
+The proposal was written against upstream `main` (2f48c9c), which has `POST /v2/sandboxes/{id}/connect`. Tag v0.2.2 only has `/sandboxes/{id}/resume` and `/sandboxes/{id}/connect`, and its cold-create `timeout` defaults to 15 s. The acceptance criteria and test plan use the v0.2.2 paths and pass `timeout` explicitly.

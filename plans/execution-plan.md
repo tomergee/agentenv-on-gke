@@ -72,12 +72,12 @@ Rules for all roles:
   trailers. Small, described commits.
 - Record every deviation from this plan in `plans/decisions.md`.
 
-## Acceptance criteria (summary; the PM refines these)
+## Acceptance criteria (summary; refined as AC-1..AC-13 in plans/acceptance-criteria.md)
 
 1. `kubectl -n agentenv-system get pods` shows gateway, scheduler and one node pod Ready.
 2. `GET /health` on the node and gateway return OK through port-forward; `GET /nodes` lists the node.
-3. `POST /sandboxes-cold` with `ubuntu:22.04` (or a pulled template) creates a sandbox that reaches running; a command runs through the gateway's envd proxy and returns output.
-4. Pause then resume (`/pause`, `/v2/.../connect`) succeeds; a file written before the pause exists after resume.
+3. `POST /sandboxes-cold` with `ubuntu:22.04` and an explicit `timeout` (the v0.2.2 default is 15 s) creates a sandbox that reaches running; a command runs through the gateway's envd proxy and returns output. Templates (`/v3/templates` builds) are out of scope.
+4. Pause then resume (`POST /sandboxes/{id}/pause`, then `POST /sandboxes/{id}/resume` or `/connect`; v0.2.2 has no `/v2/.../connect`) succeeds; a file written before the pause exists after resume.
 5. `POST /sandboxes/{id}/fork` with `count: 2` produces two children that run commands independently.
 6. Kill deletes the sandbox; `GET /v2/sandboxes` no longer lists it.
 7. Timings recorded: cold create to ready, second create of the same image, pause, resume, fork.
