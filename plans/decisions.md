@@ -214,3 +214,54 @@ and `diskSizeMB` in the request body; unset values come from the node's `[machin
 (`allow_shrink = false`). Template-based starts inherit the template's sizes, set at build
 time (`aenv template create --cpu --memory`), and cannot be overridden per start.
 
+## Developer: overlaybd conversion pipeline for SWE-bench Verified (2026-09-23)
+
+Goal: convert the 500 Verified images once so runtime nodes lazy-load blocks instead of
+converting per node. Design:
+
+- New regional Docker repository `us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images`
+  (created; same region as the runtime nodes). Converted images are tags on one package:
+  `agentenv-images/swebench-verified:sweb.eval.x86_64.<instance>`.
+- Converter tool image `us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/overlaybd-convertor:v1.4.5-obd1.0.18`
+  = containerd accelerated-container-image `convertor` v1.4.5 (userspace, no kernel module)
+  plus the AgentENV fork's static overlaybd tools (`overlaybd-tools-v1.0.18-aenv.1`), crane,
+  curl, jq. Built by `build/convert/cloudbuild-image.yaml`.
+- The convertor works inside one repository (`-r`), so `build/convert/convert-one.sh` copies
+  the source to `<instance>-src` in the target package, converts to `<instance>` with
+  `--overlaybd --vsize 64` (matches AgentENV's default 64 GB root disk), then deletes the
+  staging manifest. Idempotent (existing target tag is skipped). Auth is the Cloud Build
+  service account's metadata-server token (compute SA `142966328212-compute@`, which has
+  project-level Artifact Registry reader and writer).
+- Shards: `build/convert/cloudbuild-convert.yaml` runs one shard (every Nth instance of
+  `verified-instances.txt`) on an `E2_HIGHCPU_8` worker with a 200 GB disk, 6 h timeout;
+  `scripts/convert-launch.sh [SHARDS]` submits N async builds; `scripts/convert-status.sh`
+  shows converted counts and build states.
+- Project-level IAM changes (AC-13): `roles/artifactregistry.reader` on `agentenv-images`
+  for the runtime KSA principal (agentenv-system/default); `roles/artifactregistry.repoAdmin`
+  on `agentenv-images` for the compute SA so the build can delete its staging manifests
+  (writer cannot delete; the pilot left two `-src` tags, deleted by hand).
+
+Pilot (build 975149f8): `astropy__astropy-12907` and `django__django-11099` converted in
+38 s each (copy + convert + push). Output: Docker v2 manifest, 16 layers, 1.71 GB, every
+layer annotated `containerd.io/snapshot/overlaybd/blob-digest` = its own digest, which is
+what AgentENV's resolver keys on.
+
+Cluster verification found two runtime problems, fixed in order:
+1. **Lazy reads had no credentials.** AgentENV wires its overlaybd registry reader to a
+   credential file only if `$HOME/.docker/config.json` exists at startup
+   (`credentialConfig` mode `file`, re-read per token request). The credential sidecar
+   started concurrently, so the runtime saw no file and lazy reads failed at the token
+   request. Fix: the `registry-creds` refresher is now a native sidecar (init container with
+   `restartPolicy: Always`) gated by a startup probe on the file, so it exists before the
+   runtime starts. Confirmed by the startup log "found docker credential file; wiring
+   overlaybd runtime to reuse it for registry auth".
+2. **Artifact Registry sends a relative redirect.** Blob GETs answer 302 with
+   `Location: /artifacts-downloads/...` (no host). AgentENV's `registryfs_v2` stores the
+   Location verbatim and range requests then fail with "relative URL without a base"
+   (upstream `main` has the same code; no upstream issue found). Fix: a 6-line patch that
+   resolves the Location against the request URL
+   (`build/runtime/0001-registryfs-resolve-relative-redirect-location.patch`), built into a
+   patched runtime image `us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/aenv-server:v0.2.2-ar-redirect1`
+   by `build/runtime/cloudbuild-runtime.yaml` (clone v0.2.2, apply patches, Dockerfile.agentenv).
+   Worth an upstream PR.
+

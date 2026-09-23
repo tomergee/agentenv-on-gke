@@ -1,0 +1,28 @@
+# Builds a patched AgentENV runtime image from tag v0.2.2 plus the patches in this
+# directory (currently: resolve relative redirect Location headers, which Artifact Registry
+# sends for blob downloads; without it lazy loading of overlaybd images from AR fails with
+# "relative URL without a base"). Submit with build/runtime as the source:
+#   gcloud builds submit build/runtime --config build/runtime/cloudbuild-runtime.yaml \
+#     --project gke-ai-eco-dev --region us-central1 --async --substitutions _TAG=<tag>
+steps:
+  - name: gcr.io/cloud-builders/git
+    args: ['clone', '--depth', '1', '--branch', '${_AENV_REF}', 'https://github.com/kvcache-ai/AgentENV.git', '/workspace/src']
+  - name: gcr.io/cloud-builders/git
+    dir: /workspace/src
+    entrypoint: sh
+    args: ['-c', 'for p in /workspace/*.patch; do echo "applying $p"; git apply --verbose "$p" || exit 1; done']
+  - name: gcr.io/cloud-builders/docker
+    dir: /workspace/src
+    env: ['DOCKER_BUILDKIT=1']
+    args: ['build', '-f', 'deploy/docker/Dockerfile.agentenv', '--build-arg', 'AENV_VIRTUALIZATION_MODE=kvm',
+           '-t', 'us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/aenv-server:${_TAG}', '.']
+images:
+  - 'us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv/aenv-server:${_TAG}'
+substitutions:
+  _AENV_REF: v0.2.2
+  _TAG: v0.2.2-ar-redirect1
+options:
+  machineType: E2_HIGHCPU_32
+  diskSizeGb: 200
+  logging: CLOUD_LOGGING_ONLY
+timeout: 7200s

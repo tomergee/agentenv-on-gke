@@ -1,0 +1,22 @@
+diff --git a/storage/overlaybd/src/backend/registryfs_v2.rs b/storage/overlaybd/src/backend/registryfs_v2.rs
+index 3b58be2..26ac256 100644
+--- a/storage/overlaybd/src/backend/registryfs_v2.rs
++++ b/storage/overlaybd/src/backend/registryfs_v2.rs
+@@ -553,9 +553,16 @@ impl RegistryFSImplV2 {
+                 .ok_or_else(|| anyhow::anyhow!("redirect without Location"))?
+                 .to_str()
+                 .context("invalid Location header")?;
++            // RFC 7231 allows a relative Location. Google Artifact Registry sends one
++            // ("/artifacts-downloads/..."), so resolve it against the request URL; an
++            // absolute Location is returned unchanged by `join`.
++            let location = match Url::parse(url).and_then(|base| base.join(location)) {
++                Ok(absolute) => absolute.to_string(),
++                Err(_) => location.to_string(),
++            };
+             return Ok(ActualUrlResponse::Success(UrlInfo {
+                 mode: UrlMode::Redirect,
+-                info: location.to_string(),
++                info: location,
+                 expire_at: Instant::now() + MIN_URL_INFO_LIFE,
+             }));
+         }
