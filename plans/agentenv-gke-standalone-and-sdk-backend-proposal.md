@@ -17,7 +17,7 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 2 | AgentENV | One shared API key, checked only on nodes; no users, tenancy or quotas | Blocker | One AgentENV cluster per trust domain; an authenticating proxy later | 4.6 |
 | 3 | AgentENV | Paused sandboxes live on node-local disk and are lost when a node is replaced; no migration | High | Maintenance exclusions, autoscaled blue-green upgrades, a pre-drain commit step (not upstream) | 4.9 |
 | 4 | AgentENV + GKE | No autoscaling integration; the cluster autoscaler may remove nodes running only microVMs | High | Fixed-size pool; scale-down-disabled annotation; a custom scaler driven by `GET /nodes` | 4.10 |
-| 5 | AgentENV | Registry credentials are read only at startup by the overlaybd path; `regctl` (standard OCI pulls) re-reads the Docker config per call | High | **Prototype:** Workload Identity token sidecar refreshing the Docker config works for standard OCI pulls from Artifact Registry; lazy overlaybd reads still need a startup-time credential or an upstream refresh | 4.6, 9 |
+| 5 | AgentENV | Registry credentials: the lazy reader is wired to the Docker credential file only if it exists at startup; `regctl` (standard OCI pulls) re-reads it per call | High | **Prototype:** a Workload Identity token sidecar works for both paths once it is a native sidecar that writes the file before the runtime starts **[V-probe]**; the token in the lazy path is then whatever the file held at startup, so a restart is needed after it expires unless upstream re-reads it | 4.6, 4.12, 9 |
 | 6 | AgentENV | Standard images are fully downloaded and converted on every node on first use | High | Batch pipeline that publishes overlaybd-native images | 4.7 |
 | 7 | AgentENV | Single scheduler replica; sandbox-to-node bindings in memory by default. Measured: after a scheduler restart `GET /nodes` is empty for up to ~160 s while sandbox operations keep working | High | Redis binding store (Memorystore) plus query-only scheduler replicas; health checks must tolerate the rebuild window | 4.4, 9 |
 | 8 | AgentENV | Placement ignores load and image locality by default (no resource limits; the create's `images` hint is unused). Measured: with 4 nodes, a second create of a 1.3 GB image took 60 s again on a fresh node | High | Configure `node_resource_limit`; image-aware placement or pre-converted images for many distinct task images | 4.4, 9 |
@@ -32,7 +32,7 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 17 | GKE | Bare metal on GKE: only C3 and C4A are confirmed, and neither has local SSD; C4 bare metal with local SSD is unconfirmed; no live migration; KVM, ublk and io_uring untested on bare-metal nodes | High | Test GKE acceptance of `c4-standard-288-lssd-metal`; else C3 metal with a Hyperdisk cache, or nested VMs with local SSD | 4.2, 7 |
 | 18 | GKE | Local SSD data is lost on upgrade or repair; pool storage config is immutable | Medium | Treat node disks as caches; keep durable state in the snapshot repository | 4.2, 4.9 |
 | 19 | GKE | Surge upgrades, auto-repair and scale-down cap graceful drain at one hour. Measured: runtime shutdown blocks ~126 s if the scheduler is already gone | Medium | Autoscaled blue-green (up to 24 hours) and maintenance windows; drain runtime pods before the control plane | 4.9, 9 |
-| 20 | Artifact Registry | No lazy-loading format; bytes flow through its own front end; quota of 60,000 requests/min per region; short-lived tokens; download URLs act as capabilities; Referrers API unverified | High | Conversion pipeline; quota increase or a self-hosted registry backed by Cloud Storage; in-region load test | 4.12 |
+| 20 | Artifact Registry | No lazy-loading format (nodes convert per image, 42 to 52 s first create, about 4.5 GB per image per node **[V-probe]**); bytes flow through its own front end; quota of 60,000 requests/min per region; short-lived tokens (worked around with a Workload Identity token sidecar **[V-probe]**); download URLs act as capabilities; relative redirect `Location` breaks stock v0.2.2's lazy reader (gap 33); Referrers API unverified. GKE Image Streaming and Nydus do not apply | High | **Done in the prototype:** conversion pipeline into a regional repository; converted images start in about 5 s on any node **[V-probe]**. Next: Dragonfly peers in front of the registry (needs gap 32); in-region load test | 4.12 |
 | 21 | Cloud Storage | S3-compatible API lacks request preconditions and multipart MD5s; needs HMAC keys | Medium | Verify AgentENV's OpenDAL usage; HMAC key in Secret Manager; or native GCS support upstream | 4.6, 4.7 |
 | 22 | SDKs | No backend abstraction; creation is hard-wired to SandboxClaims; the RL SDK executes through pod exec | High | Backend protocol in the Python and RL SDKs, Kubernetes as default | 5.1, 5.2, 5.3 |
 | 23 | SDKs | Warm pools, pod identity, pod-level parameters and Kubernetes-only adapters don't map | Medium | Documented as unsupported or no-ops on the AgentENV backend | 5.4 |
@@ -43,6 +43,8 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 28 | AgentENV + Cloud Storage | **Confirmed:** Cloud Storage's S3-compatible API silently ignores `If-Match` / `If-None-Match` on PUT **[V-probe]**, so AgentENV's create-if-absent and optimistic-update guards on snapshot and volume records are no-ops there (last writer wins, no error); alias bindings are best-effort by design | Blocker for concurrent writers | Native GCS backend upstream (`x-goog-if-generation-match` works), or Filestore `posix_fs`, or serialize catalog writers | 4.13 |
 | 29 | AgentENV | Runtime downloads Firecracker, kernel, tools and overlaybd binaries from the internet at every pod start, with no retry; fresh nodes crash-loop until DNS is up **[V-probe]** | Medium | Private mirror of the dependency manifest, or bake dependencies into the runtime image; egress to GitHub and ghcr required otherwise | 9 |
 | 31 | AgentENV | API key rotation: the gateway injects its own copy of the key toward nodes and reads it only at startup; rotating the Secret without restarting the gateway breaks every call; no dual-key window **[V-probe]** | Medium | Restart gateway and runtime pods on rotation (the repo's deploy script does); upstream: reload on change or accept two keys during rotation | 4.6, 9 |
+| 32 | AgentENV | No configurable P2P or CDN cache address: the lazy reader's Dragonfly-compatible "accelerate" hook is set only by AgentENV's experimental built-in transport, and the storage config is regenerated at each start **[V-code]** | Medium | Upstream a `p2p_config.address` setting (or startup patch); then deploy Dragonfly peers per node and preheat the converted images | 4.12 |
+| 33 | AgentENV + Artifact Registry | The lazy block reader stores a redirect `Location` verbatim; Artifact Registry sends a relative one, so lazy loading from Artifact Registry fails on stock v0.2.2 ("relative URL without a base") **[V-probe]** | Blocker for lazy loading on Artifact Registry | Six-line patch (resolve against the request URL) built into the prototype's runtime image; upstream PR needed | 4.12, 9 |
 | 30 | AgentENV | API skew between releases and `main`: v0.2.2 lacks `/v2/sandboxes/{id}/connect` (breaks the E2B SDK's connect), `/proxy` prefix returns 404, `?state=a,b` returns 400 **[V-probe]** | Medium | Pin the API version in the SDK backend; feature-detect; track upstream releases | 5.2, 9 |
 
 ---
@@ -515,6 +517,70 @@ laptop, 2026-09-22) **[V-probe]**:
 | 7 | Location choice. The repositories we checked are multi-region (`us`) **[V-probe]** | A multi-region repository adds latency for a fleet in one region **[A]** | Use a regional repository in the fleet's region |
 | 8 | No node-level or peer caching. Remote repositories proxy upstream registries but don't cache on nodes **[A]** | Every node fetches from the origin; AgentENV's peer-to-peer layer is experimental | Rely on AgentENV's bounded node cache; evaluate its peer-to-peer layer later |
 
+**Update from the prototype (2026-09-23) [V-probe]:**
+
+- **Private repositories work with a Workload Identity token sidecar.** The runtime pod's
+  Kubernetes ServiceAccount was granted `roles/artifactregistry.reader` per repository, and
+  a sidecar refreshes `~/.docker/config.json` with the access token every 15 minutes.
+  AgentENV's standard-OCI puller (`regctl`) reads that file on every call, so the
+  startup-only credential loading (gap 5) does not affect this path. Task images of 1.2 to
+  1.3 GB from two private repositories pulled and ran.
+- **Per-node conversion is the real cost, not the registry.** A standard OCI task image
+  takes 42 to 52 s on its first create on a node (pull plus overlaybd conversion,
+  synchronous in the create call) and 2.3 s on a node that has converted it; each node
+  converts and stores its own copy (about 4.5 GB per image). Hence the conversion
+  pipeline: a one-time job converting the SWE-bench Verified set into a new regional
+  repository, `us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images`, so nodes
+  lazy-load blocks instead of converting (in progress at the time of writing).
+- **GKE Image Streaming does not apply.** It accelerates images containerd pulls for pods;
+  AgentENV pulls sandbox images itself and never goes through containerd. Enabling it would
+  speed up only the runtime pod's own image pull on a fresh node.
+- **Nydus does not apply either.** Nydus is a file-and-chunk lazy filesystem served by a
+  daemon; AgentENV needs block-level overlaybd layers exposed through ublk and has no Nydus
+  reader. The two are alternatives for the same job; AgentENV chose overlaybd.
+- **Dragonfly is compatible at the protocol level.** AgentENV's lazy-block reader has an
+  "accelerate address" hook that rewrites each blob range read to
+  `http://<address>/<original blob URL>` with a Range header, the same convention upstream
+  overlaybd uses with a Dragonfly peer daemon **[V-code]** `registryfs_v2.rs`. Against
+  Artifact Registry specifically:
+
+  | Aspect | Status | Notes |
+  |---|---|---|
+  | Registry compatibility | Works | Dragonfly proxies any OCI registry or HTTP origin **[V-docs]** |
+  | Authentication | Works, one caveat | Dragonfly holds no pull credentials; the client's `Authorization` header passes through, so short-lived Artifact Registry tokens work if the client refreshes them. Peers serve cached pieces without re-authorizing: one trust domain per Dragonfly deployment **[V-docs]** / **[A]** |
+  | Blob redirects | Untested | Artifact Registry answers blob GETs with a 302 to its own download endpoint whose path carries an unauthenticated token **[V-probe]**. Dragonfly follows redirects and is built for redirected storage URLs, but caching behaviour for this redirect shape needs a test **[A]** |
+  | Range requests | Works | Served from cached pieces; required by the lazy reader **[V-docs]** |
+  | Preheating | Works | The Dragonfly manager can pre-seed images from a private registry across peers **[V-docs]**: warm every node once after conversion and origin reads become rare |
+  | Request quota | Helps | Each blob range is fetched from the origin once per cluster instead of once per node |
+
+- **Lazy loading from Artifact Registry verified end to end, after two fixes [V-probe].**
+  A converter image (containerd `convertor` v1.4.5 plus the AgentENV fork's overlaybd
+  tools) converts a SWE image in about 40 s in Cloud Build into
+  `us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/swebench-verified:<instance>`
+  (Docker v2 manifest, 16 overlaybd layers, 1.7 GB, each layer annotated with
+  `containerd.io/snapshot/overlaybd/blob-digest`, which is what AgentENV keys on). Results:
+
+  | Create from a converted image | Measured |
+  |---|---|
+  | Image never seen by any node, on each of 4 nodes | 4.6 to 5.0 s to running |
+  | Remote-block cache growth per node per image | 16 to 85 MB (versus about 4.5 GB converted per node before) |
+  | First command in a fresh lazy sandbox | 15.7 s wall, including SDK connect and first-touch block reads |
+
+  The two fixes: (a) the lazy reader is wired to the Docker credential file only if it
+  exists **at startup**, so the token sidecar had to become a native sidecar (init
+  container with `restartPolicy: Always` and a startup probe on the file); (b) Artifact
+  Registry answers blob GETs with a **relative** `Location` (`/artifacts-downloads/...`)
+  and v0.2.2's lazy reader stores it verbatim and fails with "relative URL without a base".
+  A six-line patch (resolve the redirect against the request URL) is built into a local
+  runtime image and pinned in the prototype; upstream `main` has the same code and no
+  issue yet, so this needs an upstream PR (gap 33).
+
+  What is missing on the AgentENV side: in v0.2.2 the accelerate address is set only by
+  AgentENV's own experimental peer-to-peer transport, and the generated storage config is
+  rewritten at every startup, so pointing it at a Dragonfly peer needs a small upstream
+  change or a startup patch (gap 32). Dragonfly only helps the lazy path; the standard-OCI
+  path could use it as a registry mirror, but pre-conversion removes that path anyway.
+
 **Asks for the Artifact Registry team**, if we pursue this with them:
 1. A lazy-loading export, like Azure's artifact streaming: generate overlaybd, or another
    seekable format, as OCI referrers at push time.
@@ -809,6 +875,7 @@ Hands-on checks before committing:
 8. Registry authentication: AgentENV with Artifact Registry credentials over a multi-hour run, and with a self-hosted registry.
 9. ~~No routing breakage with the chosen GKE ranges next to AgentENV's internal pools.~~ **Done:** one and four runtime nodes, sandboxes reachable and placed round-robin.
 10. ~~Cloud Storage through the S3-compatible API honors `If-Match` and `If-None-Match` on ordinary writes~~ **Done, negative result:** it ignores them (section 4.13). Remaining: repeat with HMAC SigV4 auth, and decide between a native-GCS backend, Filestore, or serialized writers.
+11. Dragonfly in front of Artifact Registry: deploy peers on the KVM pool, point one node's accelerate address at its local peer, confirm the 302-to-download-endpoint blob shape is cached correctly and ranges are served from pieces, then compare Artifact Registry request counts and cold starts with and without it, after the converted images exist.
 
 ## 8. Risks and open questions
 
@@ -914,6 +981,20 @@ every call, so the startup-only credential loading (gap 5) does not bite for thi
    injects its own copy of the key toward nodes and reads it only at startup; when the
    Secret changed and only the runtime pods restarted, every request failed with 401. There
    is no hot reload and no dual-key window. Gap 31.
+
+9. **Lazy loading needs the credential file at startup.** The overlaybd reader picks up
+   `~/.docker/config.json` only when it exists when the runtime starts; a plain sidecar
+   raced it. A native sidecar with a startup probe fixed it. The lazy reader then keeps the
+   startup token, so long-running nodes need a restart or an upstream re-read once the
+   token expires (gap 5).
+10. **Artifact Registry's relative redirect breaks stock lazy loading.** Fixed with a local
+    patch; see section 4.12 and gap 33.
+
+**Pre-converted images (2026-09-23).** With the SWE-bench Verified set converted to
+overlaybd in a regional repository, a create of an image no node has seen takes 4.6 to
+5.0 s on any node, versus 42 to 52 s per node with on-the-fly conversion, and the per-node
+footprint drops from about 4.5 GB to tens of megabytes of cached blocks. Conversion costs
+about 40 s per image once, in Cloud Build.
 
 **Still unverified after the prototype:** bare-metal nodes, a shared snapshot repository on
 Cloud Storage or Filestore (and the conditional-write gap 28), templates and snapshot
