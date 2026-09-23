@@ -35,21 +35,53 @@ The orchestrator created the Docker repository `us-central1-docker.pkg.dev/gke-a
 
 The proposal was written against upstream `main` (2f48c9c), which has `POST /v2/sandboxes/{id}/connect`. Tag v0.2.2 only has `/sandboxes/{id}/resume` and `/sandboxes/{id}/connect`, and its cold-create `timeout` defaults to 15 s. The acceptance criteria and test plan use the v0.2.2 paths and pass `timeout` explicitly.
 
-## Tester: node state left behind by teardown, and how to clear it (2026-09-23)
+## Node state left behind by teardown, and how to clear it (2026-09-23, tester; consolidated by developer round 2)
 
-`scripts/teardown.sh` deletes namespace `agentenv-system` only. Inspected with a temporary
-`kubectl debug node/gke-barkland-test-kvm-pool-c2-6b3ad0c5-axvc --profile=sysadmin` pod
-(deleted afterwards) right after a teardown:
+`scripts/teardown.sh` removes the sandboxes, the runtime DaemonSet and the namespace only.
+Left on the runtime node **by design** (it is a hostPath and a host kernel module), measured
+right after a teardown that followed two image conversions:
 
 | Leftover | Size / state | Clear with |
 |---|---|---|
-| `/var/lib/aenv/env` (runtime deps: Firecracker, guest kernel, tools drive, overlaybd tools, regctl; image cache with the converted `ubuntu:22.04` and `debian:12`; snapshot store; persisted-sandboxes; the auto-generated access-token seed) | 530 MB after two images | `kubectl debug node/<node> --profile=sysadmin --image=busybox -- rm -rf /host/var/lib/aenv` (then delete the debug pod). Recreating the node pool also clears it. |
+| `/var/lib/aenv/env` on the node (mounted at `/workspace/env` in the runtime pod): runtime deps (Firecracker, guest kernel, tools drive, overlaybd tools, regctl), image cache with the converted `ubuntu:22.04` and `debian:12`, snapshot store, persisted paused sandboxes, and the generated access-token seed when the seed Secret is absent | 530 MB after two images | `scripts/clear-node-state.sh` (one-shot privileged pod in a temporary `agentenv-cleanup` namespace; refuses to run while `agentenv-system` exists). Recreating the node pool also clears it. |
 | `/var/lib/aenv/config` (rendered runtime config) | 4 KB | same |
-| `ublk_drv` kernel module, loaded with `ublks_max=4096` by the init container; `/dev/ublk-control` | loaded, no devices in use | `modprobe -r ublk_drv` from a sysadmin debug pod via `chroot /host`; a node reboot also clears it |
+| `ublk_drv` kernel module loaded with `ublks_max=4096` by the init container; `/dev/ublk-control` | loaded, no devices in use | same script (`modprobe -r ublk_drv`), or a node reboot |
 | Host sysctls applied by the init container | not persisted on COS (read-only `/etc`); lost on reboot | nothing to do |
 
-Node disk after teardown: 10.4 GB of 94 GB used (the pre-prototype baseline was about 10 GB).
+Inspect while the system runs with `kubectl -n agentenv-system exec ds/agentenv-node -c agentenv -- sh -c 'df -h /workspace; du -sh /workspace/env/*'`
+(never `kubectl debug node/...`, which creates a privileged pod outside the namespace).
+Node disk after teardown: 10.4 GB of 94 GB used (pre-prototype baseline about 10 GB).
 
 Observation: the runtime pod takes 2 to 5 minutes to leave `Terminating` with zero
 sandboxes (172 s and 301 s measured; gateway and scheduler pods are gone within 10 s). No
 `FailedPreStopHook` event was recorded. Reported to the developer in `tests/RESULTS.md`.
+
+## Developer round 2: review fixes (2026-09-23)
+
+- **H1 teardown order.** `scripts/teardown.sh` kills every running and paused sandbox through
+  the gateway, deletes the runtime DaemonSet while the scheduler is still serving, then deletes
+  the namespace. The DaemonSet keeps upstream's `terminationGracePeriodSeconds: 3600` and its
+  preStop drain; sandboxes still running at pod deletion are what that drain protects.
+- **M1 Secrets outside kustomize.** `deploy/overlays/barkland-test` no longer generates Secrets,
+  and a `$patch: delete` removes the base's empty `agentenv-auth`; `scripts/deploy.sh` creates
+  `agentenv-auth` and `agentenv-runtime-secrets` from the gitignored `.secrets/` files before
+  `kubectl apply -k`. `kubectl kustomize` and `kubectl diff -k` now work on a clean checkout.
+- **M2 control plane placement.** Gateway and scheduler carry
+  `nodeSelector cloud.google.com/gke-nodepool=default-pool`; only the runtime pod runs on the
+  kvm node.
+- **M3 image digests.** `ghcr.io/kvcache-ai/aenv-server@sha256:7ce67e1f078c461ebe00a88328c190d7cdefd12988d35dbea209a87787e0117b`
+  (the `v0.2.2-amd64` tag; an OCI index), `agentenv-gateway@sha256:452e3e4a0667f9d40c50bbf7d7a5b828fcb8245eb817f914da837dfc28e039ed`,
+  `agentenv-scheduler@sha256:7d336fbfdc29e18b598f057f53bc9790edb034266105d750b77de84bfeff2464`
+  (both `v0.2.2`, built by Cloud Build `85deda9d`).
+- **M5 home_path.** The image's `AENV_HOME_PATH=/workspace/env` overrides the config, so the
+  overlay now sets `home_path = "/workspace/env"`; the node path is `/var/lib/aenv/env`.
+- **O-5 envd reachable with the API key alone (accepted limitation).** Cold creates without
+  `secure: true` issue no per-sandbox `envdAccessToken`, so anyone holding the shared key can
+  run commands in any such sandbox. Unchanged for the prototype; `secure: true` on create
+  would require `X-Access-Token` on envd traffic.
+- **L1 hostPID (accepted).** The init container's host preparation needs `hostPID`, which is
+  pod-wide; accepted next to `privileged`, since upstream expects the same steps to be run on
+  the host by hand.
+- **L6 snapshot cache.** The upstream `[snapshot]` section exposes no node-local cache size
+  key in v0.2.2 (the commented `cache_max_size_gb` belongs to `[backend.oss]`, unused with
+  `posix_fs`), so nothing was changed; the snapshot store itself lives on the same 100 GB disk.
