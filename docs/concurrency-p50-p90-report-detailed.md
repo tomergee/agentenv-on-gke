@@ -31,6 +31,35 @@ the pause instant).
 | 10 | 10/10 | 0.18 / 0.19 | 0.15 / 0.16 | 0.15 / 0.16 | 0.72 / 0.75 | 0.54 / 0.59 | 0.17 / 0.22 |
 | 100 | 98/100 | 0.7 / 2.16 | 2.64 / 4.98 | 2.64 / 4.99 | 6.72 / 7.33 | 3.75 / 4.69 | 3.91 / 5.01 |
 
+## 2b. Start from a template (snapshot once, then create N from it)
+
+`MODE=template`. Setup, once per run: 12 source sandboxes are cold-started from one image
+(`django__django-11099`), primed with a Python command, snapshotted with
+`POST /sandboxes/{id}/snapshots {"name": "swe-tpl-django-11099"}` and killed. Twelve, because
+the prototype's snapshot repository is node-local and placement is round-robin: the first
+snapshot under the name on each node creates the alias (HTTP 201, 2.6 to 2.9 s for a 2 GB
+guest), later ones on the same node answer 400 `alias ... already points to ..., cannot rebind`
+and are counted as "existing". Setup took 5 to 6 s. Then N `POST /sandboxes
+{"templateID": "swe-tpl-django-11099", "timeout": 600}` are issued at the same instant (v0.2.2
+accepts `templateID` only on the v1 path; `POST /v2/sandboxes` answers 405). Sandboxes inherit
+the template's 2 CPU / 2 GB.
+
+| N | Pass | POST returned p50 / p90 (s) | Running p50 / p90 (s) | First command done p50 / p90 (s) | Command alone p50 / p90 (s) | Node CPU during the burst |
+|---|---|---|---|---|---|---|
+| 1 | 1/1 | 0.14 / 0.14 | 0.14 / 0.14 | 0.56 / 0.56 | 0.42 / 0.42 | 0 to 1 % |
+| 10 | 10/10 | 0.14 / 0.15 | 0.14 / 0.16 | 0.63 / 0.65 | 0.48 / 0.50 | 1 to 4 % |
+| 100 | 100/100 | 0.93 / 1.54 | 0.94 / 1.55 | 5.74 / 6.33 | 4.78 / 5.36 | not sampled |
+| 100 (repeat, sampled) | 100/100 | 0.87 / 1.46 | 0.88 / 1.46 | 5.70 / 6.30 | 4.78 / 5.41 | 100 % for 6 s, then 10 to 20 % |
+
+The sampled repeat ran the one-second `/proc/stat` sampler of section 4 on one runtime node:
+CPU busy per second from the burst instant was 87, 100, 100, 100, 100, 100, 56, 30, 18 %
+(cold start in section 4: 8 s at 100 %). `MemAvailable` on that node went from 29.5 GB to a
+minimum of 28.3 GB while 25 restored guests started and answered their first command, and was
+back at 29.7 GB 30 s later: about 50 MB of private memory per sandbox, against about 140 MB
+for a cold-booted idle sandbox (section 6). The 25 guests map the same 2 GB memory file
+(v0.2.2 restores with Firecracker's file-backed memory, `load_snapshot_file`), so clean pages
+are shared page cache and only written pages are copied.
+
 ## 3. Reading the numbers
 
 - **1 and 10 are indistinguishable.** Cold start: about 1.7 s to running, 2.0 s to the first
@@ -44,6 +73,12 @@ the pause instant).
   resume instant, of which about 4 s is the command itself) because 24 neighbours are
   faulting their memory images in at the same time.
 - **Run 1 and run 2 agree** within about 0.1 s at 1 and 10 and within about 1 s at 100.
+- **Template starts are the fast and the dense path, with the same knee.** 0.14 s to running
+  at 1 and 10 (12 times faster than cold), 0.9 s median at 100 (8 times faster), 211 starts
+  without a failure, and about a third of the host memory per sandbox. But 25 restores per
+  8-vCPU node still pin the CPU for 6 s, so the first command at 100 lands at 5.7 s instead of
+  9.6 s: what remains is not the boot but the work of 25 restored guests faulting their pages in
+  and running at once under nested virtualization.
 
 ## 4. Why 100 is slow: the node is CPU-saturated during the boot burst
 
@@ -122,10 +157,13 @@ so a burst of activity degrades into queuing instead of kills.
 
 ## 7. What would change the curve
 
-1. **Templates (committed snapshots) for the task images**, so every start is a resume: the
-   resume path is 10 to 15 times faster at low concurrency and does not spawn a Firecracker
-   process, so it also avoids the start race. Needs a shared snapshot repository (Filestore
-   or a native Cloud Storage backend; gap 28).
+1. **Templates (committed snapshots) for the task images**, so every start is a resume.
+   Measured in section 2b: 0.14 s to running at 1 and 10, 0.9 s median at 100, no failures in
+   211 starts, about 50 MB of private host memory per sandbox at start. The 25-per-node burst
+   is still CPU-bound for 6 s, so items 2 and 4 still apply. In the prototype the template had
+   to be built on every node (node-local snapshot store) and aliases cannot be re-pointed;
+   cross-node templates need a shared snapshot repository (Filestore or a native Cloud Storage
+   backend; gap 28).
 2. **More vCPUs per simultaneous start**: about 10 starts per 8 vCPUs is the knee here.
    Bare metal (no nested-virtualization tax) and bigger machines both help; so does staggering
    bursts on the client side.
@@ -136,9 +174,12 @@ so a burst of activity degrades into queuing instead of kills.
 
 ## Method notes
 
-`tests/concurrency.py` (`MODE=create|resume`) as a Kubernetes Job (`tests/concurrency-job.yaml`);
-raw per-sandbox JSON lines in `tests/concurrency-results/run2-*.jsonl` (run 2), `burst-*.jsonl`
-and `resume-*.jsonl` (run 1), `run3-create-100-util.jsonl` and `run4-create-100-cpu.jsonl`
-(instrumented 100-bursts). A harness bug in run 2's first resume-100 attempt (a failed thread
+`tests/concurrency.py` (`MODE=create|resume|template`; template mode reads `TEMPLATE`,
+`SOURCES` and `PRIME_CMD`) as a Kubernetes Job (`tests/concurrency-job.yaml`); raw per-sandbox
+JSON lines in `tests/concurrency-results/run2-*.jsonl` (run 2), `burst-*.jsonl` and
+`resume-*.jsonl` (run 1), `run3-create-100-util.jsonl` and `run4-create-100-cpu.jsonl`
+(instrumented 100-bursts), `template-{1,10,100}.jsonl` and `template-100-cpu.jsonl` with the
+sampler output in `template-100-cpu-sampler.txt` (section 2b). The template
+`swe-tpl-django-11099` is left on the four nodes for reuse. A harness bug in run 2's first resume-100 attempt (a failed thread
 never reached a barrier, stalling the rest) was fixed before the reported run; the stalled
 attempt is not included.

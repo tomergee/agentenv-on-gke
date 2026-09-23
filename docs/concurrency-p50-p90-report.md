@@ -24,6 +24,18 @@ instant the N requests were issued. Full tables, run 1 comparison and methodolog
 
 Pause itself: 0.15 s at 1 and 10, 0.7 / 2.2 s at 100.
 
+## Start from a template (snapshot once, then create N from it)
+
+Setup, once per run and per node: cold-start one sandbox from the image, run a command in
+it, snapshot it under a name (2.6 to 2.9 s for a 2 GB guest), kill it. Then N
+`POST /sandboxes {"templateID": name}` at the same instant.
+
+| Sandboxes started at once | Running (s) | First command done (s) | Passed |
+|---|---|---|---|
+| 1 | 0.1 / 0.1 | 0.6 / 0.6 | 1/1 |
+| 10 | 0.1 / 0.2 | 0.6 / 0.7 | 10/10 |
+| 100 | 0.9 / 1.5 | 5.7 / 6.3 | 100/100 (two runs) |
+
 ## Takeaways
 
 1. **1 and 10 cost the same.** Ten simultaneous starts across four nodes behave like one.
@@ -41,14 +53,26 @@ Pause itself: 0.15 s at 1 and 10, 0.7 / 2.2 s at 100.
    Declared sizes (2 CPU / 2 GB) are not reserved anywhere, which is fine while sandboxes
    are mostly idle and dangerous if they all get busy: set the scheduler's allocation limits
    from measured working sets.
+6. **A template makes every start a resume, and it is the dense path.** To running: 0.14 s
+   at 1 and 10 (cold 1.6 s) and 0.9 s median at 100 (cold 7.5 s); 211 template starts, no
+   failures. Host memory barely moved: 25 starts per node from one 2 GB template lowered the
+   node's available memory by 1.2 GB in total, about 50 MB per sandbox, because the guests
+   map the same memory file and only the pages they write become private copies (a cold-booted
+   idle sandbox holds about 140 MB). The burst still pins the CPU, 100 % for 6 s at 25 per node
+   against 8 s cold, which is why the first command at 100 waits until 5.7 s: the boot is gone,
+   the page faults of 25 restored guests under nested virtualization are not.
 
 ## What would improve it
 
-- Templates for the task images, so every start is a resume.
+- Templates for the task images (measured above): they remove the boot and the start
+  failures, but a 25-per-node burst is still CPU-bound, so size or stagger bursts as well.
+  In v0.2.2 the template must exist on every node (node-local snapshot store) and an alias
+  cannot be re-pointed, so template updates need new names.
 - More vCPUs per simultaneous start, or staggered bursts; bare metal removes the
   nested-virtualization tax.
 - A pre-spawned Firecracker pool sized for the burst, and an upstream retry on the
   machine-configuration call.
 - Scheduler admission limits so oversized bursts queue instead of contending.
 
-Raw data: `tests/concurrency-results/run2-*.jsonl`; harness: `tests/concurrency.py`.
+Raw data: `tests/concurrency-results/run2-*.jsonl` and `template-*.jsonl`; harness:
+`tests/concurrency.py` (`MODE=create|resume|template`).

@@ -27,6 +27,8 @@ spec:
             - {name: "N", value: "__N__"}
             - {name: RUN_LABEL, value: "__LABEL__"}
             - {name: MODE, value: "__MODE__"}
+            - {name: TEMPLATE, value: "swe-tpl-django-11099"}
+            - {name: SOURCES, value: "12"}
             - {name: INSTANCES, value: "/work/instances.txt"}
             - {name: CPU, value: "2"}
             - {name: MEM, value: "2048"}

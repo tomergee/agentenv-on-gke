@@ -46,6 +46,7 @@ or workaround before scale; **Medium** is worth addressing, with a known workaro
 | 32 | AgentENV | No configurable P2P or CDN cache address: the lazy reader's Dragonfly-compatible "accelerate" hook is set only by AgentENV's experimental built-in transport, and the storage config is regenerated at each start **[V-code]** | Medium | Upstream a `p2p_config.address` setting (or startup patch); then deploy Dragonfly peers per node and preheat the converted images | 4.12 |
 | 33 | AgentENV + Artifact Registry | The lazy block reader stores a redirect `Location` verbatim; Artifact Registry sends a relative one, so lazy loading from Artifact Registry fails on stock v0.2.2 ("relative URL without a base") **[V-probe]** | Blocker for lazy loading on Artifact Registry | Six-line patch (resolve against the request URL) built into the prototype's runtime image; upstream PR needed | 4.12, 9 |
 | 34 | AgentENV | Under a start burst (about 25 simultaneous per node) 1 to 3 % of creates fail with "set machine configuration: connection refused" on the Firecracker API socket; no retry in the runtime **[V-probe]** | Medium | Retry the configuration call upstream; size `[pool.firecracker]` for the expected burst; stagger client bursts; treat create 500 as retriable | 9 |
+| 35 | AgentENV | v0.2.2 templates: `templateID` accepted only by the v1 create (v2 answers 405), aliases immutable (no re-point, so template updates need new names), and with a node-local snapshot store a template must exist on every node or round-robin creates fail with 400 | Medium | Version template names; build the template on every node until a shared repository exists (gap 28) | 9 |
 | 30 | AgentENV | API skew between releases and `main`: v0.2.2 lacks `/v2/sandboxes/{id}/connect` (breaks the E2B SDK's connect), `/proxy` prefix returns 404, `?state=a,b` returns 400 **[V-probe]** | Medium | Pin the API version in the SDK backend; feature-detect; track upstream releases | 5.2, 9 |
 
 ---
@@ -926,8 +927,8 @@ virtualization, from the client through the gateway:
 | Kill | 0.4 s |
 | Placement of 8 creates across 4 nodes | 2 per node (round-robin) |
 
-These are cold-create and in-node pause/resume paths; upstream's sub-50 ms figure is for
-resume from a committed snapshot template, which the prototype did not exercise.
+These are cold-create and in-node pause/resume paths; template starts, the path behind
+upstream's sub-50 ms figure, were measured later (below).
 
 **Confirmed on GKE.** COS nodes work: `/dev/kvm`, io_uring, `ublk_drv` (kernel default
 `ublks_max` was 64; the init container reloads it at 4096 when no devices are in use),
@@ -996,6 +997,12 @@ every call, so the startup-only credential loading (gap 5) does not bite for thi
    token expires (gap 5).
 10. **Artifact Registry's relative redirect breaks stock lazy loading.** Fixed with a local
     patch; see section 4.12 and gap 33.
+11. **Templates in v0.2.2 are v1-only, node-local and immutable.** `templateID` is accepted
+    by `POST /sandboxes` (the v2 create answers 405); with the node-local snapshot store a
+    template must be created on every node under the same name before round-robin placement
+    can use it (a create landing on a node without it answers 400 "template not found"); an
+    alias cannot be re-pointed (400 "already points to"), so template updates need new names.
+    Gap 35.
 
 **Pre-converted images (2026-09-23).** With the SWE-bench Verified set converted to
 overlaybd in a regional repository, a create of an image no node has seen takes 4.6 to
@@ -1027,10 +1034,21 @@ first command median 7.0 s; 100 of 100 succeeded. Resume is the sub-second path;
 is not, and a traced single cold create spends about 0.7 s in gateway and scheduler routing,
 0.3 to 0.7 s on registry manifest and config fetches, 0.7 s creating the block device, and the
 rest booting the guest.
+**Template starts (same day) [V-probe].** The Miles recipe simulated: one source sandbox per
+node cold-started, primed and snapshotted under one name (2.6 to 2.9 s for a 2 GB guest), then
+1, 10 and 100 creates from the template at once. To running 0.14 s at 1 and 10 and 0.9 s
+median at 100 (cold: 1.6 s and 7.5 s); first command 0.6 s and 5.7 s; 211 of 211 starts
+succeeded. Density: 25 template starts on one node lowered its available memory by 1.2 GB in
+total, about 50 MB per sandbox against about 140 MB for a cold-booted idle one, because the
+guests map the same memory file (file-backed restore) and only written pages become private.
+The burst is still CPU-bound: 100 % for 6 s at 25 per node (cold 8 s), so the knee of about
+10 simultaneous starts per 8 vCPUs moves little; templates remove the boot and the start
+failures, not the cost of 25 restored guests faulting and running at once under nested
+virtualization.
 
 **Still unverified after the prototype:** bare-metal nodes, a shared snapshot repository on
 Cloud Storage or Filestore (and the conditional-write gap 28), templates and snapshot
-resume across nodes, HMAC auth, autoscaler behavior, live migration with running microVMs,
+resume across nodes (templates were verified node-locally only), HMAC auth, autoscaler behavior, live migration with running microVMs,
 gateway timeouts for long streams, registry authentication over a multi-hour run.
 
 ## 10. Sources

@@ -20,7 +20,10 @@ GW = os.environ["GW"].rstrip("/"); KEY = os.environ["KEY"]; N = int(os.environ.g
 IMG_REPO = os.environ.get("IMG_REPO", "us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/swebench-verified")
 CPU = int(os.environ.get("CPU", "2")); MEM = int(os.environ.get("MEM", "2048")); TIMEOUT = int(os.environ.get("TIMEOUT", "900"))
 ENVD = Version(os.environ.get("ENVD_VERSION", "0.5.15")); LABEL = os.environ.get("RUN_LABEL", "")
-MODE = os.environ.get("MODE", "create")   # create | resume (create, pause all, resume all at once)
+MODE = os.environ.get("MODE", "create")   # create | resume | template (build a template on every node, then N creates from it)
+TEMPLATE = os.environ.get("TEMPLATE", "swe-tpl")  # template (snapshot) name used in template mode
+SOURCES = int(os.environ.get("SOURCES", "12"))   # source sandboxes to snapshot in template mode (round-robin covers every node)
+PRIME_CMD = os.environ.get("PRIME_CMD", "cd /testbed && python -c \"import sys; print(sys.version)\"")
 SETTLE = float(os.environ.get("PAUSE_SETTLE_S", "5"))
 raw = os.environ.get("INSTANCES", "")
 insts = [l.strip() for l in (open(raw) if os.path.exists(raw) else raw.split(",")) if l.strip()][:N]
@@ -50,7 +53,10 @@ def arrive(b):
 def create_phase(inst, rec):
     """Create, wait running, first command. Returns the sandbox id or None; sets rec['status']."""
     t0 = time.monotonic(); rec["t_start_epoch"] = time.time()
-    r = api("POST", "/sandboxes-cold", json={"image": f"{IMG_REPO}:{inst}", "cpuCount": CPU, "memoryMB": MEM, "timeout": TIMEOUT})
+    if MODE == "template":   # v0.2.2: template creates go through POST /sandboxes (v2 is GET-only)
+        r = api("POST", "/sandboxes", json={"templateID": TEMPLATE, "timeout": TIMEOUT})
+    else:
+        r = api("POST", "/sandboxes-cold", json={"image": f"{IMG_REPO}:{inst}", "cpuCount": CPU, "memoryMB": MEM, "timeout": TIMEOUT})
     rec["http"] = r.status_code
     sid = r.json().get("sandboxID") if r.headers.get("content-type", "").startswith("application/json") else None
     rec["t_post"] = round(time.monotonic() - t0, 3)
@@ -123,6 +129,40 @@ def one(inst):
             rec["status"] = "error"; rec["error"] = f"{type(e).__name__}: {e}"[:300]
     return rec
 
+setup = {}
+if MODE == "template":
+    # Build the template on every runtime node: the prototype's snapshot repository is
+    # node-local and placement is round-robin, so snapshot SOURCES cold-started sandboxes
+    # under one name; repeats on the same node just re-point the name.
+    ts0 = time.monotonic()
+    def build_source(i):
+        info = {"i": i}
+        try:
+            r = api("POST", "/sandboxes-cold", json={"image": f"{IMG_REPO}:{insts[0]}", "cpuCount": CPU, "memoryMB": MEM, "timeout": TIMEOUT})
+            sid = r.json()["sandboxID"]
+            for _ in range(600):
+                if api("GET", f"/sandboxes/{sid}").json().get("state") == "running": break
+                time.sleep(0.25)
+            out = sbx(sid).commands.run(PRIME_CMD, timeout=180); info["prime_rc"] = out.exit_code
+            t1 = time.monotonic()
+            sr = api("POST", f"/sandboxes/{sid}/snapshots", json={"name": TEMPLATE})
+            info["snapshot_http"] = sr.status_code; info["snapshot_s"] = round(time.monotonic() - t1, 2)
+            info["snapshot_id"] = sr.json().get("snapshotID") if sr.ok else sr.text[:120]
+            # v0.2.2 aliases are immutable: a second snapshot under the same name on a node
+            # answers 400 "already points to ...", which means that node is already covered.
+            info["alias_state"] = "created" if sr.ok else ("existing" if "already points" in sr.text else "error")
+            api("DELETE", f"/sandboxes/{sid}")
+        except Exception as e:                  # noqa: BLE001
+            info["error"] = f"{type(e).__name__}: {e}"[:200]
+        return info
+    with ThreadPoolExecutor(max_workers=SOURCES) as ex:
+        setup["sources"] = list(ex.map(build_source, range(SOURCES)))
+    setup["template"] = TEMPLATE; setup["setup_s"] = round(time.monotonic() - ts0, 1)
+    setup["snapshots_created"] = sum(1 for x in setup["sources"] if x.get("alias_state") == "created")
+    setup["snapshots_existing"] = sum(1 for x in setup["sources"] if x.get("alias_state") == "existing")
+    setup["snapshot_errors"] = [x for x in setup["sources"] if x.get("alias_state") not in ("created", "existing")]
+    time.sleep(3)
+
 with ThreadPoolExecutor(max_workers=N) as ex:
     results = list(ex.map(one, insts))
 # every sandbox stayed alive until here: let heartbeats catch up, snapshot per-node counts, then kill everything
@@ -145,6 +185,7 @@ ok = [r for r in results if r.get("status") == "pass"]
 summ = {"summary": True, "n": N, "label": LABEL, "pass": len(ok), "fail": N - len(ok),
         "cpu": CPU, "mem_mb": MEM, "per_node_running_at_peak": per_node, "node_util_at_peak": node_util, "kill_all_s": kill_s}
 summ["mode"] = MODE
+if setup: summ["template_setup"] = {k: v for k, v in setup.items() if k != "sources"}; summ["template_sources"] = setup["sources"]
 for k in ("t_post", "t_running", "t_first_cmd", "cmd_s") + (("pause_s", "resume_call_s", "resume_running_s", "resume_first_cmd_s", "resume_cmd_s") if MODE == "resume" else ()):
     v = [r[k] for r in ok if k in r]
     summ[k] = {"p50": pct(v, .5), "p90": pct(v, .9), "max": pct(v, 1.0), "min": pct(v, 0.0)}

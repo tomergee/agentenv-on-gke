@@ -350,3 +350,15 @@ they run 25 idle sandboxes at a few percent CPU and 5 to 10 GB. Start-race failu
 0 to 5 per 100 with that starvation. Harness fix: threads that fail before a barrier still
 arrive at it (the first resume-100 attempt of run 2 stalled for two barrier timeouts).
 
+## Orchestrator: template-based starts (2026-09-23)
+
+Added `MODE=template` to the concurrency harness to simulate the upstream Miles recipe (one
+template per task, then creates from it). Findings: v0.2.2 accepts `templateID` only on the
+v1 `POST /sandboxes` (`POST /v2/sandboxes` answers 405); the snapshot repository is node-local,
+so the harness snapshots 12 sources under one name to cover the four round-robin nodes, and a
+create routed to a node without the alias answers 400 "template not found"; aliases are
+immutable (400 "already points to ..., cannot rebind"), so the second snapshot on a node is
+counted as "existing" and template updates need new names. Results (docs/concurrency-p50-p90-
+report.md): to running 0.14 s at 1 and 10, 0.9 s median at 100; first command 0.6 s and 5.7 s;
+211 of 211 passed. A sampled 100-burst still pinned a node's CPU at 100 % for 6 s (cold 8 s)
+while available memory dropped only 1.2 GB for 25 guests. The template is left on the nodes.
