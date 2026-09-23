@@ -1017,6 +1017,13 @@ per-node CPU at 25 per node (median 8 to 9 s to running, max 10.9 s, first comma
 all within 11.6 s). 1 to 3 of 100 creates fail with a refused connection on the Firecracker
 API socket during a burst; the runtime has no retry there (gap 34). Details in the prototype
 repository's `docs/concurrency-report.md`.
+**Pause and resume bursts (same day) [V-probe].** Pausing then resuming the same 1, 10 and
+100 sandboxes at once: at 1 and 10, pause 0.18 s, resume 0.11 to 0.17 s, first command 0.46 to
+0.67 s after resume; at 100 (25 per node), pause median 1.5 s, resume median 3.9 s (max 5.9 s),
+first command median 7.0 s; 100 of 100 succeeded. Resume is the sub-second path; cold create
+is not, and a traced single cold create spends about 0.7 s in gateway and scheduler routing,
+0.3 to 0.7 s on registry manifest and config fetches, 0.7 s creating the block device, and the
+rest booting the guest.
 
 **Still unverified after the prototype:** bare-metal nodes, a shared snapshot repository on
 Cloud Storage or Filestore (and the conditional-write gap 28), templates and snapshot

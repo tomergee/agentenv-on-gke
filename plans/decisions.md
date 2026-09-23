@@ -332,3 +332,12 @@ from 3 to 15 in the overlay config (rolled out); the rerun failed 1 of 100 with 
 error, so the cause is a spawn-readiness race without retry, not the timeout. Kept the 15 s
 setting. No orphan sandboxes after any run.
 
+## Orchestrator: pause/resume burst (2026-09-23)
+
+Same 1/10/100 bursts with pause-all then resume-all (docs/concurrency-report.md part 2).
+N=1 and N=10: pause 0.18 s, resume 0.11 to 0.17 s, first command 0.46 to 0.67 s after resume.
+N=100: pause median 1.5 s, resume median 3.9 s (max 5.9 s), first command median 7.0 s;
+100/100 passed, no failures on the resume path. Single cold create traced: 1.97 s total of
+which 1.3 s inside the node (manifest 0.26 s, config 0.49 s when uncached, ublk device 0.68 s,
+then Firecracker spawn/boot/envd), the rest gateway and scheduler overhead.
+

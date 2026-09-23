@@ -20,6 +20,8 @@ GW = os.environ["GW"].rstrip("/"); KEY = os.environ["KEY"]; N = int(os.environ.g
 IMG_REPO = os.environ.get("IMG_REPO", "us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/swebench-verified")
 CPU = int(os.environ.get("CPU", "2")); MEM = int(os.environ.get("MEM", "2048")); TIMEOUT = int(os.environ.get("TIMEOUT", "900"))
 ENVD = Version(os.environ.get("ENVD_VERSION", "0.5.15")); LABEL = os.environ.get("RUN_LABEL", "")
+MODE = os.environ.get("MODE", "create")   # create | resume (create, pause all, resume all at once)
+SETTLE = float(os.environ.get("PAUSE_SETTLE_S", "5"))
 raw = os.environ.get("INSTANCES", "")
 insts = [l.strip() for l in (open(raw) if os.path.exists(raw) else raw.split(",")) if l.strip()][:N]
 assert len(insts) == N, f"need {N} instances, got {len(insts)}"
@@ -36,12 +38,14 @@ def sbx(sid):
                    traffic_access_token=None, connection_config=cfg)
 
 start_barrier = threading.Barrier(N)
+pause_barrier = threading.Barrier(N)
+resume_barrier = threading.Barrier(N)
 release = threading.Event()
 ids = []; lock = threading.Lock()
 
 def one(inst):
     rec = {"instance": inst, "n": N, "label": LABEL}
-    start_barrier.wait()                       # all N POST at the same moment
+    start_barrier.wait(timeout=120)            # all N POST at the same moment
     t0 = time.monotonic(); rec["t_start_epoch"] = time.time()
     try:
         r = api("POST", "/sandboxes-cold", json={"image": f"{IMG_REPO}:{inst}", "cpuCount": CPU, "memoryMB": MEM, "timeout": TIMEOUT})
@@ -65,7 +69,34 @@ def one(inst):
         out = sbx(sid).commands.run("echo ready && test -d /testbed && echo TESTBED_OK", timeout=180)
         rec["t_first_cmd"] = round(time.monotonic() - t0, 3); rec["cmd_s"] = round(time.monotonic() - t1, 3)
         rec["status"] = "pass" if (out.exit_code == 0 and "TESTBED_OK" in out.stdout) else "cmd_failed"
-        if rec["status"] != "pass": rec["cmd_out"] = (out.stdout + out.stderr)[-200:]
+        if rec["status"] != "pass": rec["cmd_out"] = (out.stdout + out.stderr)[-200:]; return rec
+        if MODE != "resume": return rec
+        # ---- pause all at the same moment ----
+        try: pause_barrier.wait(timeout=600)
+        except threading.BrokenBarrierError: pass
+        tp = time.monotonic()
+        pr = api("POST", f"/sandboxes/{sid}/pause")
+        rec["pause_http"] = pr.status_code; rec["pause_s"] = round(time.monotonic() - tp, 3)
+        if pr.status_code != 204: rec["status"] = "pause_failed"; rec["body"] = pr.text[:200]; return rec
+        time.sleep(SETTLE)
+        # ---- resume all at the same moment ----
+        try: resume_barrier.wait(timeout=600)
+        except threading.BrokenBarrierError: pass
+        tr = time.monotonic(); rec["t_resume_start_epoch"] = time.time()
+        rr = api("POST", f"/sandboxes/{sid}/resume", json={"timeout": TIMEOUT})
+        rec["resume_http"] = rr.status_code; rec["resume_call_s"] = round(time.monotonic() - tr, 3)
+        if rr.status_code not in (200, 201): rec["status"] = "resume_failed"; rec["body"] = rr.text[:200]; return rec
+        state = ""
+        while time.monotonic() - tr < 300:
+            st = api("GET", f"/sandboxes/{sid}"); state = st.json().get("state", "") if st.ok else ""
+            if state == "running": break
+            time.sleep(0.1)
+        rec["resume_running_s"] = round(time.monotonic() - tr, 3)
+        if state != "running": rec["status"] = "resume_not_running"; rec["state"] = state; return rec
+        tc = time.monotonic()
+        out2 = sbx(sid).commands.run("echo back && test -d /testbed && echo TESTBED_OK", timeout=180)
+        rec["resume_first_cmd_s"] = round(time.monotonic() - tr, 3); rec["resume_cmd_s"] = round(time.monotonic() - tc, 3)
+        if not (out2.exit_code == 0 and "TESTBED_OK" in out2.stdout): rec["status"] = "resume_cmd_failed"; rec["cmd_out"] = (out2.stdout + out2.stderr)[-200:]
         return rec
     except Exception as e:                      # noqa: BLE001
         rec.setdefault("status", "error"); rec["error"] = f"{type(e).__name__}: {e}"[:300]; return rec
@@ -88,9 +119,10 @@ def pct(v, p):
 ok = [r for r in results if r.get("status") == "pass"]
 summ = {"summary": True, "n": N, "label": LABEL, "pass": len(ok), "fail": N - len(ok),
         "cpu": CPU, "mem_mb": MEM, "per_node_running_at_peak": per_node, "kill_all_s": kill_s}
-for k in ("t_post", "t_running", "t_first_cmd", "cmd_s"):
+summ["mode"] = MODE
+for k in ("t_post", "t_running", "t_first_cmd", "cmd_s") + (("pause_s", "resume_call_s", "resume_running_s", "resume_first_cmd_s", "resume_cmd_s") if MODE == "resume" else ()):
     v = [r[k] for r in ok if k in r]
     summ[k] = {"p50": pct(v, .5), "p90": pct(v, .9), "max": pct(v, 1.0), "min": pct(v, 0.0)}
 bad = [r for r in results if r.get("status") != "pass"]
-summ["failures"] = [{k: r.get(k) for k in ("instance", "status", "http", "error", "state", "body")} for r in bad][:20]
+summ["failures"] = [{k: r.get(k) for k in ("instance", "status", "http", "pause_http", "resume_http", "error", "state", "body")} for r in bad][:20]
 print(json.dumps(summ), flush=True)

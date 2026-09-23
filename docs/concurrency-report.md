@@ -97,3 +97,49 @@ kubectl -n agentenv-system logs job/agentenv-concurrency-100 | grep '^{' > tests
 ```
 
 Raw results: `tests/concurrency-results/*.jsonl` (one JSON line per sandbox, plus a summary line).
+
+## Part 2: snapshot resume, 1, 10 and 100 at the same moment
+
+Same harness with `MODE=resume`: create N (cold, as in part 1), run one command, then **pause
+all N at the same instant**, wait 5 s, **resume all N at the same instant**
+(`POST /sandboxes/{id}/resume`), poll to `running`, and run one command. Pause and resume are
+same-node operations on AgentENV's node-local snapshot (memory pages plus the sealed disk
+layer); no registry or image work is involved.
+
+| Run | Pass | Pause call (s) p50 / p90 / max | Resume call returned (s) | Running after resume (s) | First command after resume (s) | Command alone after resume (s) | Per node |
+|---|---|---|---|---|---|---|---|
+| N=1 | 1/1 | 0.18 / 0.18 / 0.18 | 0.11 / 0.11 / 0.11 | 0.11 / 0.11 / 0.11 | 0.46 / 0.46 / 0.46 | 0.35 / 0.35 / 0.35 | 1 / 0 / 0 / 0 |
+| N=10 | 10/10 | 0.18 / 0.19 / 0.19 | 0.17 / 0.21 / 0.23 | 0.17 / 0.22 / 0.24 | 0.67 / 0.75 / 0.76 | 0.51 / 0.56 / 0.56 | 2 / 2 / 3 / 3 |
+| N=100 | 100/100 | 1.54 / 3.09 / 3.96 | 3.89 / 5.0 / 5.89 | 3.91 / 5.01 / 5.89 | 6.98 / 7.69 / 8.22 | 3.15 / 4.21 / 6.17 | 25 / 25 / 25 / 25 |
+
+Running-after-resume distribution at N=100 (seconds from the barrier): 1-2 s: 8, 2-3 s: 28, 3-4 s: 24, 4-5 s: 29, 5-6 s: 11.
+
+Observations:
+
+- **1 and 10 resume in well under a second.** Pause 0.18 s; resume returns in 0.11 to 0.17 s
+  with the sandbox already `running`; the first command completes 0.46 to 0.67 s after the
+  resume was issued. This is the path that fits the "pause/resume under 1 s" requirement.
+- **100 at once contends again, but less than cold create.** Median resume 3.9 s (max 5.9 s)
+  against 8 to 9 s for cold create; first command after resume median 7.0 s (max 8.2 s). Pause
+  also slowed to a median 1.5 s (max 4.0 s) when 25 sandboxes per node paused together, since
+  each pause captures dirty memory pages and seals the disk layer. **100 of 100 passed**; no
+  start-race failures on this path because no Firecracker process is spawned.
+- The post-resume command is slower than the pre-pause one at N=100 (median 3.2 s against
+  1.6 s), consistent with first-touch page faults being served from the memory image while 24
+  neighbours do the same.
+
+### Where the cold-create seconds go (single sandbox, no contention)
+
+From the node's own timers and a traced single create: the create call returned in 1.97 s;
+inside the runtime the create span took 1.3 s, so about 0.7 s is gateway, scheduler
+round-trip and HTTP overhead before the node starts. Inside the node: image manifest and
+config fetches from the registry average 0.26 s and 0.49 s (the config fetch is skipped once
+cached), creating the overlaybd block device averages 0.68 s, and the remainder is spawning
+or taking a pooled Firecracker process, booting the guest kernel, pivoting to the image and
+waiting for envd. All of it runs under nested virtualization. A resume skips the manifest
+fetch, the device creation and the kernel boot, which is why it lands at 0.1 to 0.2 s.
+
+What would move cold creates toward the resume numbers: templates (committed snapshots) for
+the task images so that every start is a resume; a larger pre-spawned Firecracker pool; a
+warm manifest/config cache; bare-metal nodes to remove the nested-virtualization tax.
+

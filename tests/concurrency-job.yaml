@@ -1,10 +1,10 @@
 # In-cluster load generator for tests/concurrency.py. Render with N and RUN_LABEL substituted:
-#   sed "s/__N__/100/; s/__LABEL__/burst-100/" tests/concurrency-job.yaml | kubectl -n agentenv-system apply -f -
+#   sed "s/__N__/100/; s/__LABEL__/burst-100/; s/__MODE__/create/" tests/concurrency-job.yaml | kubectl -n agentenv-system apply -f -
 # The script and the instance list come from ConfigMap agentenv-concurrency (see docs/concurrency-report.md).
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: agentenv-concurrency-__N__
+  name: agentenv-concurrency-__MODE__-__N__
   namespace: agentenv-system
   labels: {app.kubernetes.io/name: agentenv-concurrency}
 spec:
@@ -26,6 +26,7 @@ spec:
             - {name: GW, value: "http://agentenv-gateway:8080"}
             - {name: "N", value: "__N__"}
             - {name: RUN_LABEL, value: "__LABEL__"}
+            - {name: MODE, value: "__MODE__"}
             - {name: INSTANCES, value: "/work/instances.txt"}
             - {name: CPU, value: "2"}
             - {name: MEM, value: "2048"}
