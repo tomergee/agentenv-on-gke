@@ -6,7 +6,8 @@ set -u
 cd "$(dirname "$0")/../.."
 CTX=gke_gke-ai-eco-dev_us-central1-a_barkland-test; K="kubectl --context $CTX"
 echo "== $(date +%T) waiting for AgentENV runtime pods on kvm-pool-c4"
-for i in $(seq 1 60); do n=$($K -n agentenv-system get pods -l app=agentenv-node -o wide --no-headers 2>/dev/null | grep -c "kvm-pool-c4.*Running\|Running.*kvm-pool-c4"); r=$($K -n agentenv-system get pods -l app=agentenv-node --no-headers 2>/dev/null | grep -c "Running"); [ "$r" -ge 4 ] && { echo "agentenv node pods running: $r"; break; }; sleep 10; done
+WANT=${WANT_NODES:-4}
+for i in $(seq 1 60); do r=$($K -n agentenv-system get pods -l app.kubernetes.io/name=agentenv-node --no-headers 2>/dev/null | grep -c "Running"); [ "$r" -ge "$WANT" ] && { echo "agentenv node pods running: $r"; break; }; [ $i -eq 60 ] && { echo "only $r agentenv node pods after 600 s; aborting"; exit 1; }; sleep 10; done
 $K -n agentenv-system get pods -o wide --no-headers | awk '{print $1, $3, $7}' | head -8
 ae() { echo "=== $(date +%T) agentenv $*"; JOB_TIMEOUT_S=1800 tests/run-concurrency.sh "$1" "$2" "c4-$3" 2>&1 | tail -1 || true; }
 ae create 1 create-1; ae create 10 create-10; ae create 100 create-100; ae create 100 create-100-b

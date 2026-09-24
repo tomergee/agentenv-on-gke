@@ -1,0 +1,46 @@
+# Two policies, both manual-trigger, whole-pod, checkpoint-then-resume:
+#  - per-sandbox: what the Python SDK extension expects (groups by the controller's
+#    agents.x-k8s.io/sandbox-name-hash label), used by the harness's suspend mode.
+#  - golden: groups by the template label, so every new pod from a template restores from the
+#    latest Ready snapshot of the group (examples/podsnapshot-golden-warmpool pattern).
+apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotPolicy
+metadata:
+  name: asbench-per-sandbox
+  namespace: asbench
+spec:
+  storageConfigName: asbench-snapshots
+  selector:
+    matchLabels:
+      asbench-snap: per-sandbox
+  snapshotScope: whole-pod
+  triggerConfig:
+    type: manual
+    postCheckpoint: resume
+  snapshotGroupingRules:
+    groupByLabelValue:
+      labels:
+        - agents.x-k8s.io/sandbox-name-hash
+      groupRetentionPolicy:
+        maxSnapshotCountPerGroup: 2
+---
+apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotPolicy
+metadata:
+  name: asbench-golden
+  namespace: asbench
+spec:
+  storageConfigName: asbench-snapshots
+  selector:
+    matchLabels:
+      asbench-snap: golden
+  snapshotScope: whole-pod
+  triggerConfig:
+    type: manual
+    postCheckpoint: resume
+  snapshotGroupingRules:
+    groupByLabelValue:
+      labels:
+        - golden-pool
+      groupRetentionPolicy:
+        maxSnapshotCountPerGroup: 2

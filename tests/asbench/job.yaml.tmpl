@@ -29,6 +29,8 @@ spec:
             - {name: KEEP, value: "__KEEP__"}
             - {name: CPU_REQ, value: "100m"}
             - {name: MEM_REQ, value: "256Mi"}
+            - {name: RUNTIME_CLASS, value: "__RUNTIME_CLASS__"}
+            - {name: POD_SA, value: "__POD_SA__"}
           resources:
             requests: {cpu: 500m, memory: 512Mi}
           volumeMounts: [{name: work, mountPath: /work}]

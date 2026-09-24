@@ -9,6 +9,14 @@ metadata:
   name: asbench
   namespace: asbench
 ---
+# Identity of the sandbox pods themselves: Pod Snapshots read and write the bucket as this KSA
+# (tokenSource: podKSA), so it needs storage.bucketViewer + storage.objectUser on the bucket.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: asbench-pods
+  namespace: asbench
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -20,6 +28,12 @@ rules:
     verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: ["agents.x-k8s.io"]
     resources: ["sandboxes"]
+    verbs: ["get", "list", "watch", "patch", "delete"]   # patch: spec.operatingMode for suspend/resume
+  - apiGroups: ["podsnapshot.gke.io"]
+    resources: ["podsnapshotmanualtriggers"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["podsnapshot.gke.io"]
+    resources: ["podsnapshots"]
     verbs: ["get", "list", "watch", "delete"]
   - apiGroups: [""]
     resources: ["pods"]

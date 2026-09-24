@@ -1,0 +1,11 @@
+# GKE Pod Snapshots storage for the asbench namespace. Rendered by scripts/c4/5-snapshot-prereqs.sh.
+apiVersion: podsnapshot.gke.io/v1
+kind: PodSnapshotStorageConfig
+metadata:
+  name: asbench-snapshots
+spec:
+  snapshotStorageConfig:
+    gcs:
+      bucket: ${SNAPSHOT_BUCKET}
+      path: asbench
+      tokenSource: podKSA
