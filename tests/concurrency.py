@@ -54,6 +54,8 @@ def create_phase(inst, rec):
     """Create, wait running, first command. Returns the sandbox id or None; sets rec['status']."""
     t0 = time.monotonic(); rec["t_start_epoch"] = time.time()
     if MODE == "template":   # v0.2.2: template creates go through POST /sandboxes (v2 is GET-only)
+        # Every sandbox comes from the one template; "instance" above is only the thread's label.
+        rec["template"] = TEMPLATE; rec["image"] = f"{IMG_REPO}:{insts[0]}"
         r = api("POST", "/sandboxes", json={"templateID": TEMPLATE, "timeout": TIMEOUT})
     else:
         r = api("POST", "/sandboxes-cold", json={"image": f"{IMG_REPO}:{inst}", "cpuCount": CPU, "memoryMB": MEM, "timeout": TIMEOUT})

@@ -39,6 +39,12 @@ gateway's envd proxy with the E2B Python SDK 2.51.0. Three experiments:
   import, snapshotted under one name (2.6 to 2.9 s for a 2 GB guest) and killed; then N
   `POST /sandboxes {"templateID": name}` at once.
 
+Distinct images: the cold and resume bursts use 100 different task images, one per sandbox
+(the same 100 in both, all Django instances, so they share most image layers and the node
+block caches were warm across them); the template bursts use one image, `django__django-11099`,
+through one template (the per-record `instance` field there is only the thread's label). The
+separate whole-set sweep in `tests/sweep-summary.md` covered all 500 images once.
+
 Every run kills its sandboxes at the end. During the 100-bursts a one-second `/proc/stat`
 sampler ran inside a runtime pod on one node; `kubectl top` averages over a minute and hides
 the burst.
