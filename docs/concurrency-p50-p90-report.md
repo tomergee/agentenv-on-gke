@@ -106,28 +106,31 @@ template start 100 % for 6 s, then 10 to 20 % while the commands ran, then a few
    of 25 restored guests faulting their pages in and running at once under nested
    virtualization is what remains.
 
-## Compared with Agent Substrate (2026-09-24)
+## Compared with Agent Substrate on the same hardware (2026-09-24)
 
-The same harness method was run against Agent Substrate (gVisor actors, upstream `31a5e0ba`)
-on 10 × n2-standard-16, with the same 100 Django images; full tables in
-`tomergee/substrate-explorations`, `docs/benchmarks/2026-09-24-concurrency-1-10-100/`.
-Per-node concurrency differs (10 per node there, 25 here), so compare paths, not only N.
+The same harness method was run against Agent Substrate (upstream `31a5e0ba`) on **4 ×
+c2-standard-8 with nested virtualization, the node shape used here**, with the same 100 Django
+images and 2 vCPU / 2 GiB sandboxes, so N=100 is 25 per node on all three. Full tables in
+`tomergee/substrate-explorations`, `docs/benchmarks/2026-09-24-concurrency-1-10-100/README-4-nodes.md`
+(an earlier 10-node Substrate run is kept in `README.md` there).
 
-| Path | N | AgentENV (here) | Substrate gVisor | Substrate microVM (Kata, nested) |
+| Path (seconds to running, P50 / P90) | N | AgentENV (here) | Substrate gVisor | Substrate microVM (Kata) |
 |---|---|---|---|---|
-| Template start, image cached, to running | 1 / 100 | 0.14 / 0.9 | 1.6 to 2.7 / 4.6 | 3.5 / 6.1 |
-| Cold boot, image cached, to running | 1 | 1.6 | 0.16 | 0.86 |
-| Start with the image not on the node | 1 | 4 to 5 (lazy blocks) | 9 to 15 (full pull) | 13 to 15 (full pull) |
-| Pause then resume to running | 1 / 10 / 100 | 0.10 / 0.15 / 2.6 | 0.18 / 0.39 / 0.89 | 0.24 / 0.29 / 0.86 |
-| Durable snapshot then resume | 1 / 100 | not available | 2.8 / 8.9 | 4.8 / 10.3 |
-| Guest command round trip | 1 | 0.4 | 0.02 | 0.04 to 0.09 |
+| Template start, image cached | 1 / 100 | 0.14 / 0.9 | 1.7 / 2.6 | 3.6 / 7.2 |
+| Cold boot, image cached | 1 / 100 | 1.6 / 7.5 | 0.23 / 1.17 | 0.92 / 9.7 |
+| First command after a cold boot | 100 | 9.6 / 10.5 | 2.4 / 2.5 | 10.1 / 13.6 |
+| Pause then resume | 1 / 10 / 100 | 0.10 / 0.15 / 2.6 | 0.20 / 0.25 / 1.61 | 0.28 / 0.35 / 3.0 |
+| Durable snapshot then resume | 1 / 100 | not available | 3.8 / 2.7 | 3.7 / 6.7 |
+| Guest command round trip | 1 / 100 | 0.4 / 4.8 | 0.03 / 0.7 | 0.04 / 0.3 |
+| Failures | all | 0 to 5 per 100 cold | 0 of 1,800 | 0 of 1,800 |
 
-AgentENV wins on template restore and on unseen images because it boots a microVM from a
-lazily loaded block device and restores from a node-local memory file; Substrate wins on cold
-boot with cached layers, on pause and resume at 100, on command latency through its router, and
-it has a durable snapshot path. Substrate's microVM class costs under a second over gVisor on
-every path except suspend, where the 2 GiB memory image goes to GCS. Substrate's image pull and
-cache-oblivious placement dominate its tail in both classes.
+AgentENV keeps the fastest start by an order of magnitude when a template exists, because its
+memory snapshot is a node-local file map; Substrate's gVisor class has the fastest cold start
+(a process, not a VM) and the lowest command latency; Substrate's microVM class matches
+AgentENV's cold boot at low concurrency and, like AgentENV, becomes CPU-bound at 25 guests per
+8 vCPU. Substrate adds a durable snapshot path and showed no memory pressure at 25 restored
+2 GiB Kata guests per 32 GB node. Its new gaps at this density are cleanup: 31 of 3,600 actors
+stuck in DELETING or CRASHED after bulk deletes.
 
 ## What would improve it
 
