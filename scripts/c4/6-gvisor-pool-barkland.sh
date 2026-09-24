@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # gVisor (GKE Sandbox) pool for the agent-sandbox snapshot rows: same shape as the C2 comparison
-# (4 x c2-standard-8). Regional CPU quota is full, so kvm-pool-c4 is scaled to 0 first; run this
+# (4 x c2-standard-8). If regional CPU quota is short, scale kvm-pool-c4 to 0 first; run this
 # only after scripts/c4/3-run-barkland.sh has finished. Pod Snapshots need a non-E2 family.
 set -euo pipefail
 P=gke-ai-eco-dev; C=barkland-test; Z=us-central1-a
