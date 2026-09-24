@@ -50,6 +50,11 @@ def template_body(name, tag, digest):
             "metadata": {"name": name, "namespace": NS, "labels": {"asbench": "1"}},
             "spec": {"podTemplate": {"metadata": {"labels": {"asbench": "1"}}, "spec": {
                 "nodeSelector": {"cloud.google.com/gke-nodepool": NODE_POOL},
+                # Tiny requests plus image locality let the scheduler pack ~95 of 100 pods on one
+                # node; spread them so N=100 is 25 per node like the other systems.
+                "topologySpreadConstraints": [{"maxSkew": 2, "topologyKey": "kubernetes.io/hostname",
+                                               "whenUnsatisfiable": "ScheduleAnyway",
+                                               "labelSelector": {"matchLabels": {"asbench": "1"}}}],
                 "terminationGracePeriodSeconds": 1,
                 "containers": [{"name": "main", "image": img_ref(tag, digest), "command": ["/bin/sh", "-c", "sleep infinity"],
                                 "resources": {"requests": {"cpu": CPU_REQ, "memory": MEM_REQ},
