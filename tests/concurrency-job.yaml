@@ -1,6 +1,6 @@
-# In-cluster load generator for tests/concurrency.py. Render with N and RUN_LABEL substituted:
-#   sed "s/__N__/100/; s/__LABEL__/burst-100/; s/__MODE__/create/" tests/concurrency-job.yaml | kubectl -n agentenv-system apply -f -
-# The script and the instance list come from ConfigMap agentenv-concurrency (see docs/concurrency-report.md).
+# In-cluster load generator for tests/concurrency.py. Render and run with tests/run-concurrency.sh,
+# which substitutes the __PLACEHOLDERS__ and refreshes ConfigMap agentenv-concurrency (script +
+# instance list). See docs/concurrency-p50-p90-report.md.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -30,8 +30,10 @@ spec:
             - {name: TEMPLATE, value: "swe-tpl-django-11099"}
             - {name: SOURCES, value: "12"}
             - {name: INSTANCES, value: "/work/instances.txt"}
-            - {name: CPU, value: "2"}
-            - {name: MEM, value: "2048"}
+            - {name: CPU, value: "__CPU__"}
+            - {name: MEM, value: "__MEM__"}
+            - {name: FILL_TOTAL, value: "__FILL_TOTAL__"}
+            - {name: FILL_BATCH, value: "__FILL_BATCH__"}
             - name: KEY
               valueFrom: {secretKeyRef: {name: agentenv-auth, key: AENV_API_KEY}}
           resources:

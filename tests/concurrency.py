@@ -8,6 +8,10 @@ summary JSON line. Runs inside the cluster (Job) or from a laptop with a port-fo
 Env: GW (gateway URL), KEY (API key), N (concurrency), INSTANCES (path or comma list of
 instance tags), IMG_REPO, CPU (default 2), MEM (default 2048), TIMEOUT (sandbox TTL s),
 ENVD_VERSION (default 0.5.15), RUN_LABEL (free text recorded in the output).
+MODE=fill keeps adding sandboxes in batches of FILL_BATCH up to FILL_TOTAL (cycling through the
+N instances), records per level the batch latencies, a probe command on the oldest sandbox and
+per-node count / CPU / memory from /nodes, and stops early when a batch mostly fails, a node
+passes FILL_STOP_MEM_PERCENT memory, or the probe exceeds FILL_PROBE_MAX_S.
 """
 import json, os, sys, time, threading
 from concurrent.futures import ThreadPoolExecutor
@@ -25,6 +29,8 @@ TEMPLATE = os.environ.get("TEMPLATE", "swe-tpl")  # template (snapshot) name use
 SOURCES = int(os.environ.get("SOURCES", "12"))   # source sandboxes to snapshot in template mode (round-robin covers every node)
 PRIME_CMD = os.environ.get("PRIME_CMD", "cd /testbed && python -c \"import sys; print(sys.version)\"")
 SETTLE = float(os.environ.get("PAUSE_SETTLE_S", "5"))
+FILL_TOTAL = int(os.environ.get("FILL_TOTAL", "400")); FILL_BATCH = int(os.environ.get("FILL_BATCH", "40"))
+FILL_STOP_MEM = float(os.environ.get("FILL_STOP_MEM_PERCENT", "85")); FILL_PROBE_MAX_S = float(os.environ.get("FILL_PROBE_MAX_S", "30"))
 raw = os.environ.get("INSTANCES", "")
 insts = [l.strip() for l in (open(raw) if os.path.exists(raw) else raw.split(",")) if l.strip()][:N]
 assert len(insts) == N, f"need {N} instances, got {len(insts)}"
@@ -107,6 +113,70 @@ def resume_phase2(sid, rec):
     rec["resume_first_cmd_s"] = round(time.monotonic() - tr, 3); rec["resume_cmd_s"] = round(time.monotonic() - tc, 3)
     if not (out2.exit_code == 0 and "TESTBED_OK" in out2.stdout): rec["status"] = "resume_cmd_failed"; rec["cmd_out"] = (out2.stdout + out2.stderr)[-200:]
 
+def pct(v, p):
+    v = sorted(v); return round(v[min(len(v) - 1, int(round(p * (len(v) - 1))))], 2) if v else None
+
+def node_snapshot():
+    out = {}
+    for n in api("GET", "/nodes").json():
+        m = n.get("metrics") or {}; tot = m.get("memoryTotalBytes") or 0; used = m.get("memoryUsedBytes") or 0
+        out[n.get("id")] = {"sandboxes": n.get("sandboxCount"), "cpu_percent": m.get("cpuPercent"),
+                            "mem_used_gb": round(used / 2**30, 1), "mem_percent": round(100 * used / tot, 1) if tot else None}
+    return out
+
+def probe_cmd(sid):
+    tp = time.monotonic()
+    try:
+        out = sbx(sid).commands.run("echo probe", timeout=120)
+        return round(time.monotonic() - tp, 2) if out.exit_code == 0 else -1
+    except Exception:                           # noqa: BLE001
+        return -1
+
+def fill_run():
+    """Fill the cluster level by level until FILL_TOTAL or a stop condition, then kill everything."""
+    levels = []; all_recs = []; probe = None; total_ok = 0; stop = None
+    while total_ok < FILL_TOTAL and not stop:
+        b = min(FILL_BATCH, FILL_TOTAL - total_ok)
+        recs = [{"instance": insts[(len(all_recs) + i) % len(insts)], "n": N, "label": LABEL, "batch": len(levels)} for i in range(b)]
+        def go(rec):
+            try: create_phase(rec["instance"], rec)
+            except Exception as e:              # noqa: BLE001
+                rec.setdefault("status", "error"); rec["error"] = f"{type(e).__name__}: {e}"[:300]
+            return rec
+        tb = time.monotonic()
+        with ThreadPoolExecutor(max_workers=b) as ex: recs = list(ex.map(go, recs))
+        batch_s = round(time.monotonic() - tb, 2)
+        ok = [r for r in recs if r.get("status") == "pass"]; total_ok += len(ok); all_recs += recs
+        if probe is None and ok: probe = ok[0]["id"]
+        probe_s = probe_cmd(probe) if probe else None
+        time.sleep(3)                           # let node heartbeats catch up before sampling
+        try: nodes = node_snapshot()
+        except Exception as e:                  # noqa: BLE001
+            nodes = {}; print(json.dumps({"warn": f"nodes: {e}"[:200]}), flush=True)
+        level = {"level": len(levels), "batch_size": b, "batch_ok": len(ok), "running_total": total_ok, "batch_s": batch_s,
+                 "t_running": {"p50": pct([r["t_running"] for r in ok], .5), "p90": pct([r["t_running"] for r in ok], .9)},
+                 "t_first_cmd": {"p50": pct([r["t_first_cmd"] for r in ok], .5), "p90": pct([r["t_first_cmd"] for r in ok], .9)},
+                 "probe_cmd_s": probe_s, "nodes": nodes,
+                 "fail_sample": [(r.get("status"), r.get("http"), (r.get("body") or r.get("error") or "")[:120]) for r in recs if r.get("status") != "pass"][:3]}
+        levels.append(level); print(json.dumps(level), flush=True)
+        mem_max = max([v.get("mem_percent") or 0 for v in nodes.values()] or [0])
+        if len(ok) < b / 2: stop = f"{b - len(ok)} of {b} creates failed"
+        elif mem_max >= FILL_STOP_MEM: stop = f"node memory {mem_max}% >= {FILL_STOP_MEM}%"
+        elif probe_s is not None and (probe_s < 0 or probe_s > FILL_PROBE_MAX_S): stop = f"probe command {probe_s} s"
+    time.sleep(20)                              # steady state at the final level
+    try: steady = node_snapshot()
+    except Exception as e:                      # noqa: BLE001
+        steady = {"error": str(e)[:100]}
+    probe_steady = probe_cmd(probe) if probe else None
+    kill_t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=20) as ex: list(ex.map(lambda s: api("DELETE", f"/sandboxes/{s}"), ids))
+    kill_s = round(time.monotonic() - kill_t0, 1)
+    for r in all_recs: print(json.dumps(r), flush=True)
+    summ = {"summary": True, "mode": "fill", "label": LABEL, "cpu": CPU, "mem_mb": MEM, "fill_total_target": FILL_TOTAL, "batch": FILL_BATCH,
+            "running_reached": total_ok, "stop_reason": stop or "target reached", "levels": levels,
+            "steady_state_nodes": steady, "steady_probe_cmd_s": probe_steady, "kill_all_s": kill_s, "killed": len(ids)}
+    print(json.dumps(summ), flush=True)
+
 def one(inst):
     rec = {"instance": inst, "n": N, "label": LABEL}
     start_barrier.wait(timeout=120)            # all N POST at the same moment
@@ -130,6 +200,9 @@ def one(inst):
         except Exception as e:                  # noqa: BLE001
             rec["status"] = "error"; rec["error"] = f"{type(e).__name__}: {e}"[:300]
     return rec
+
+if MODE == "fill":
+    fill_run(); sys.exit(0)
 
 setup = {}
 if MODE == "template":
@@ -181,8 +254,6 @@ kill_t0 = time.monotonic()
 for sid in ids: api("DELETE", f"/sandboxes/{sid}")
 kill_s = round(time.monotonic() - kill_t0, 2)
 for r in results: print(json.dumps(r), flush=True)
-def pct(v, p):
-    v = sorted(v); return round(v[min(len(v) - 1, int(round(p * (len(v) - 1))))], 2) if v else None
 ok = [r for r in results if r.get("status") == "pass"]
 summ = {"summary": True, "n": N, "label": LABEL, "pass": len(ok), "fail": N - len(ok),
         "cpu": CPU, "mem_mb": MEM, "per_node_running_at_peak": per_node, "node_util_at_peak": node_util, "kill_all_s": kill_s}
