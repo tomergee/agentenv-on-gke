@@ -137,6 +137,31 @@ AgentENV's cold boot at low concurrency and, like AgentENV, becomes CPU-bound at
 2 GiB Kata guests per 32 GB node. Its new gaps at this density are cleanup: 31 of 3,600 actors
 stuck in DELETING or CRASHED after bulk deletes.
 
+## How many fit per node (fill run, 1 vCPU / 512 MB sandboxes)
+
+A separate run on 2026-09-24 kept adding sandboxes in batches of 40 across the same 4 nodes
+until a batch mostly failed (`tests/concurrency.py`, `MODE=fill`; raw records in
+`tests/concurrency-results/fill-1c512m.jsonl`). Sandboxes were declared 1 vCPU / 512 MB, the
+smallest a microVM allows, each ran one command and then sat idle.
+
+| Running per node | Create to running p50 / p90 (s) | Node CPU busy | Node memory used | Failed creates in the batch |
+|---|---|---|---|---|
+| 10 | 2.8 / 3.6 | 57 to 66 % | 10 to 25 % | 0 of 40 |
+| 30 | 2.7 / 3.3 | 64 to 83 % | 16 to 30 % | 1 of 40 |
+| 60 | 4.0 / 4.3 | 82 to 97 % | 24 to 38 % | 2 of 40 |
+| 87 | 5.6 / 6.0 | 84 to 99 % | 32 to 47 % | 3 of 40 |
+| 107 | 8.5 / 9.8 | 88 to 99 % | 38 to 53 % | 1 of 40 |
+| 117 | 20.4 / 24.2 | 93 to 98 % | 41 to 56 % | 0 of 40 |
+| 120 | 14.0 / 62.6 | 94 to 96 % | 41 to 57 % | 27 of 40, run stopped |
+
+480 sandboxes were running at the end (118 to 123 per node); a command in the oldest one
+still answered in 0.65 s. The limit is CPU, not memory: idle microVMs cost about 60 to 80
+millicores each, so 100 of them saturate 8 vCPUs while memory sits near 40 percent. Shrinking
+the declared size from 2 vCPU / 2 GB to 1 vCPU / 512 MB changed neither the idle cost nor the
+ceiling. Failures below the ceiling were the same Firecracker start race as in the bursts;
+at 120 per node they became `WaitReady` timeouts. Practical ceiling on these nodes: about 100
+idle sandboxes per 8 vCPU, with about 10 simultaneous starts per node before latency climbs.
+
 ## What would improve it
 
 - Templates for the task images (measured above): they remove the boot, the start failures and
