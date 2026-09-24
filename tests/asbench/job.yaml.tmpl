@@ -24,10 +24,11 @@ spec:
             - {name: "N", value: "__N__"}
             - {name: RUN_LABEL, value: "__LABEL__"}
             - {name: NAMESPACE, value: "asbench"}
-            - {name: NODE_POOL, value: "kvm-pool-c2"}
+            - {name: NODE_POOL, value: "__NODE_POOL__"}
             - {name: IMAGES, value: "/work/images.tsv"}
             - {name: KEEP, value: "__KEEP__"}
-            - {name: CPU_REQ, value: "200m"}
+            - {name: CPU_REQ, value: "100m"}
+            - {name: MEM_REQ, value: "256Mi"}
           resources:
             requests: {cpu: 500m, memory: 512Mi}
           volumeMounts: [{name: work, mountPath: /work}]

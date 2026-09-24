@@ -22,7 +22,7 @@ MODE = os.environ.get("MODE", "warm-one"); N = int(os.environ.get("N", "1")); LA
 NS = os.environ.get("NAMESPACE", "asbench"); NODE_POOL = os.environ.get("NODE_POOL", "kvm-pool-c2")
 IMG_REPO = os.environ.get("IMG_REPO", "us-docker.pkg.dev/gke-ai-eco-dev/swebench-mirror/swebench-verified")
 CPU_LIMIT = os.environ.get("CPU_LIMIT", "2"); MEM_LIMIT = os.environ.get("MEM_LIMIT", "2Gi")
-CPU_REQ = os.environ.get("CPU_REQ", "250m"); MEM_REQ = os.environ.get("MEM_REQ", "512Mi")
+CPU_REQ = os.environ.get("CPU_REQ", "100m"); MEM_REQ = os.environ.get("MEM_REQ", "256Mi")   # requests only place pods; limits carry the 2 vCPU / 2 GiB size
 POOL_TIMEOUT = float(os.environ.get("POOL_TIMEOUT_S", "1800")); KEEP = os.environ.get("KEEP", "0") == "1"
 RUN = uuid.uuid4().hex[:6]
 EXT = ("extensions.agents.x-k8s.io", "v1beta1"); CORE = ("agents.x-k8s.io", "v1beta1")
@@ -71,8 +71,20 @@ def create(plural, body):
         if e.status == 409: return cust.get_namespaced_custom_object(EXT[0], EXT[1], NS, plural, body["metadata"]["name"])
         raise
 
+def retry(fn, tries=4, base=0.3):
+    """The python client turns some transport errors into a bodyless ApiException that it then
+    fails to decode (AttributeError); treat those like any transient error and retry."""
+    for i in range(tries):
+        try: return fn()
+        except client.exceptions.ApiException as e:
+            if e.status in (404, 409): raise
+            if i == tries - 1: raise
+        except (AttributeError, OSError):
+            if i == tries - 1: raise
+        time.sleep(base * (2 ** i))
+
 def get(plural, name):
-    try: return cust.get_namespaced_custom_object(EXT[0], EXT[1], NS, plural, name)
+    try: return retry(lambda: cust.get_namespaced_custom_object(EXT[0], EXT[1], NS, plural, name))
     except client.exceptions.ApiException as e:
         if e.status == 404: return None
         raise
@@ -152,8 +164,8 @@ def one(i, pool, tag):
         if state != "ready": rec["status"] = "not_ready"; return rec
         pod = sb or name
         try:
-            p = core.read_namespaced_pod(pod, NS); rec["node"] = p.spec.node_name
-        except client.exceptions.ApiException: pass
+            p = retry(lambda: core.read_namespaced_pod(pod, NS)); rec["node"] = p.spec.node_name
+        except Exception: pass                  # noqa: BLE001
         t1 = time.monotonic()
         rc, txt = run_cmd(pod, ["/bin/sh", "-c", "echo ready && test -d /testbed && echo TESTBED_OK"])
         rec["t_first_cmd"] = round(time.monotonic() - t0, 3); rec["cmd_s"] = round(time.monotonic() - t1, 3); rec["cmd_exit"] = rc
@@ -172,8 +184,11 @@ with ThreadPoolExecutor(max_workers=20) as ex: list(ex.map(lambda c: delete("san
 kill_s = round(time.monotonic() - kill_t0, 1)
 # wait until the claimed pods are gone, so the next run starts clean
 tg = time.monotonic()
-while time.monotonic() - tg < 300:
-    left = [p for p in core.list_namespaced_pod(NS, label_selector="asbench=1").items if (p.metadata.labels or {}).get("agents.x-k8s.io/claim-uid") or p.metadata.deletion_timestamp]
+while time.monotonic() - tg < 90:      # pods of deleted claims usually vanish in seconds; do not stall a run on stragglers
+    try:
+        left = [p for p in retry(lambda: core.list_namespaced_pod(NS, label_selector="asbench=1")).items if (p.metadata.labels or {}).get("agents.x-k8s.io/claim-uid") or p.metadata.deletion_timestamp]
+    except Exception:                           # noqa: BLE001
+        left = ["?"]
     if not left: break
     time.sleep(2)
 gone_s = round(time.monotonic() - kill_t0, 1)

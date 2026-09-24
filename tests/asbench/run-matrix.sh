@@ -5,7 +5,8 @@
 set -u
 cd "$(dirname "$0")"
 export JOB_TIMEOUT_S=3600
-run() { echo "=== $(date +%T) run $*"; ./run.sh "$@" 2>&1 | tail -1 || true; }
+PFX=${LABEL_PREFIX:-}
+run() { echo "=== $(date +%T) run $*"; ./run.sh "$1" "$2" "$PFX$3" 2>&1 | tail -1 || true; }
 run warm-one 10  warm-one-10
 run warm-one 100 warm-one-100
 run warm-one 100 warm-one-100-b
