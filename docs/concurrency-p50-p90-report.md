@@ -106,6 +106,27 @@ template start 100 % for 6 s, then 10 to 20 % while the commands ran, then a few
    of 25 restored guests faulting their pages in and running at once under nested
    virtualization is what remains.
 
+## Compared with Agent Substrate (2026-09-24)
+
+The same harness method was run against Agent Substrate (gVisor actors, upstream `31a5e0ba`)
+on 10 × n2-standard-16, with the same 100 Django images; full tables in
+`tomergee/substrate-explorations`, `docs/benchmarks/2026-09-24-concurrency-1-10-100/`.
+Per-node concurrency differs (10 per node there, 25 here), so compare paths, not only N.
+
+| Path | N | AgentENV (here) | Substrate |
+|---|---|---|---|
+| Template start, image cached, to running | 1 / 100 | 0.14 / 0.9 | 1.6 to 2.7 / 4.6 |
+| Cold boot, image cached, to running | 1 | 1.6 | 0.16 |
+| Start with the image not on the node | 1 | 4 to 5 (lazy blocks) | 9 to 15 (full pull) |
+| Pause then resume to running | 1 / 10 / 100 | 0.10 / 0.15 / 2.6 | 0.18 / 0.39 / 0.89 |
+| Durable snapshot then resume | 1 / 100 | not available | 2.8 / 8.9 |
+| Guest command round trip | 1 | 0.4 | 0.02 |
+
+AgentENV wins on template restore and on unseen images because it boots a microVM from a
+lazily loaded block device; Substrate wins on cold boot with cached layers, on pause and resume
+at 100, on command latency through its router, and it has a durable snapshot path. Substrate's
+image pull and cache-oblivious placement dominate its tail.
+
 ## What would improve it
 
 - Templates for the task images (measured above): they remove the boot, the start failures and
