@@ -119,15 +119,17 @@ images and 2 vCPU / 2 GiB sandboxes, so N=100 is 25 per node on all three. Full 
 | Template start, image cached | 1 / 100 | 0.14 / 0.9 | 1.7 / 2.6 | 3.6 / 7.2 | 0.25 / 0.9 (warm pool adoption) |
 | Cold boot, image cached | 1 / 100 | 1.6 / 7.5 | 0.23 / 1.17 | 0.92 / 9.7 | 1.5 / 3.2 |
 | First command after a cold boot | 100 | 9.6 / 10.5 | 2.4 / 2.5 | 10.1 / 13.6 | 5.7 / 6.4 |
-| Pause then resume | 1 / 10 / 100 | 0.10 / 0.15 / 2.6 | 0.20 / 0.25 / 1.61 | 0.28 / 0.35 / 3.0 | not available |
-| Durable snapshot then resume | 1 / 100 | not available | 3.8 / 2.7 | 3.7 / 6.7 | not available |
+| Pause then resume | 1 / 10 / 100 | 0.10 / 0.15 / 2.6 | 0.20 / 0.25 / 1.61 | 0.28 / 0.35 / 3.0 | not measured (Pod Snapshots need a gVisor pool) |
+| Durable snapshot then resume | 1 / 100 | not available | 3.8 / 2.7 | 3.7 / 6.7 | not measured |
 | Guest command round trip | 1 / 100 | 0.4 / 4.8 | 0.03 / 0.7 | 0.04 / 0.3 | 0.1 / 3.0 (exec via API server) |
 | Failures | all | 0 to 5 per 100 cold | 0 of 1,800 | 0 of 1,800 | 0 of 233 |
 
 The agent-sandbox column ran on these same `kvm-pool-c2` nodes with the AgentENV runtime pods
 resident and without image streaming, so its distinct-image modes stop at N=10; the harness is
-`tests/asbench/`. Its warm pool is the second-fastest start and needs no snapshot machinery; it
-has no pause, resume or fork.
+`tests/asbench/`. Its warm pool is the second-fastest start and needs no snapshot machinery. It
+does have suspend and resume (`spec.operatingMode`) and, through the Python SDK's GKE extension,
+snapshot, restore and golden-snapshot warm pools on GKE Pod Snapshots; those need gVisor nodes and
+were not measured on this runc pool. Fork does not exist.
 
 AgentENV keeps the fastest start by an order of magnitude when a template exists, because its
 memory snapshot is a node-local file map; Substrate's gVisor class has the fastest cold start
