@@ -113,19 +113,21 @@ on 10 × n2-standard-16, with the same 100 Django images; full tables in
 `tomergee/substrate-explorations`, `docs/benchmarks/2026-09-24-concurrency-1-10-100/`.
 Per-node concurrency differs (10 per node there, 25 here), so compare paths, not only N.
 
-| Path | N | AgentENV (here) | Substrate |
-|---|---|---|---|
-| Template start, image cached, to running | 1 / 100 | 0.14 / 0.9 | 1.6 to 2.7 / 4.6 |
-| Cold boot, image cached, to running | 1 | 1.6 | 0.16 |
-| Start with the image not on the node | 1 | 4 to 5 (lazy blocks) | 9 to 15 (full pull) |
-| Pause then resume to running | 1 / 10 / 100 | 0.10 / 0.15 / 2.6 | 0.18 / 0.39 / 0.89 |
-| Durable snapshot then resume | 1 / 100 | not available | 2.8 / 8.9 |
-| Guest command round trip | 1 | 0.4 | 0.02 |
+| Path | N | AgentENV (here) | Substrate gVisor | Substrate microVM (Kata, nested) |
+|---|---|---|---|---|
+| Template start, image cached, to running | 1 / 100 | 0.14 / 0.9 | 1.6 to 2.7 / 4.6 | 3.5 / 6.1 |
+| Cold boot, image cached, to running | 1 | 1.6 | 0.16 | 0.86 |
+| Start with the image not on the node | 1 | 4 to 5 (lazy blocks) | 9 to 15 (full pull) | 13 to 15 (full pull) |
+| Pause then resume to running | 1 / 10 / 100 | 0.10 / 0.15 / 2.6 | 0.18 / 0.39 / 0.89 | 0.24 / 0.29 / 0.86 |
+| Durable snapshot then resume | 1 / 100 | not available | 2.8 / 8.9 | 4.8 / 10.3 |
+| Guest command round trip | 1 | 0.4 | 0.02 | 0.04 to 0.09 |
 
 AgentENV wins on template restore and on unseen images because it boots a microVM from a
-lazily loaded block device; Substrate wins on cold boot with cached layers, on pause and resume
-at 100, on command latency through its router, and it has a durable snapshot path. Substrate's
-image pull and cache-oblivious placement dominate its tail.
+lazily loaded block device and restores from a node-local memory file; Substrate wins on cold
+boot with cached layers, on pause and resume at 100, on command latency through its router, and
+it has a durable snapshot path. Substrate's microVM class costs under a second over gVisor on
+every path except suspend, where the 2 GiB memory image goes to GCS. Substrate's image pull and
+cache-oblivious placement dominate its tail in both classes.
 
 ## What would improve it
 
