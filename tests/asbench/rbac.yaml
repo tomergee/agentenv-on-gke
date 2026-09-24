@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: asbench
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: asbench
+  namespace: asbench
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: asbench
+  namespace: asbench
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxtemplates", "sandboxwarmpools", "sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["get", "create"]   # the websocket exec path is a GET (verb get); SPDY is a POST (verb create)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: asbench
+  namespace: asbench
+subjects: [{kind: ServiceAccount, name: asbench, namespace: asbench}]
+roleRef: {kind: Role, name: asbench, apiGroup: rbac.authorization.k8s.io}

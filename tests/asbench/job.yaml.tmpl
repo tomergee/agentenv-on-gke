@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: asbench-__MODE__-__N__
+  namespace: asbench
+  labels: {app.kubernetes.io/name: asbench}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: asbench}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: asbench
+      nodeSelector: {cloud.google.com/gke-nodepool: default-pool}
+      containers:
+        - name: load
+          image: python:3.12-slim
+          command: ["sh", "-c"]
+          args: ["pip install -q --root-user-action=ignore kubernetes 1>&2 && exec python /work/asbench.py"]
+          env:
+            - {name: MODE, value: "__MODE__"}
+            - {name: "N", value: "__N__"}
+            - {name: RUN_LABEL, value: "__LABEL__"}
+            - {name: NAMESPACE, value: "asbench"}
+            - {name: NODE_POOL, value: "kvm-pool-c2"}
+            - {name: IMAGES, value: "/work/images.tsv"}
+            - {name: KEEP, value: "__KEEP__"}
+            - {name: CPU_REQ, value: "200m"}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+          volumeMounts: [{name: work, mountPath: /work}]
+      volumes:
+        - name: work
+          configMap: {name: asbench}
