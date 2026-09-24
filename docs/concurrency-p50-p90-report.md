@@ -7,22 +7,24 @@ comparison, per-second CPU traces and methodology are in
 
 ## What was deployed
 
-AgentENV v0.2.2 running standalone on the GKE cluster `barkland-test` (project
-`gke-ai-eco-dev`, zone `us-central1-a`, GKE 1.35.8, Container-Optimized OS with kernel 6.12).
-The gateway and scheduler are built from the upstream tag with Cloud Build (one replica each,
-on the `default-pool` e2-standard-4 nodes); the runtime is the upstream `aenv-server:v0.2.2`
-image with a six-line patch so lazy loading follows Artifact Registry's relative redirects.
-Sandboxes run on the `kvm-pool-c2` node pool: **4 × c2-standard-8** (Intel Cascade Lake,
-8 vCPU, 32 GB, 100 GB pd-balanced boot disk, no local SSD) with **nested virtualization**, so
-Firecracker microVMs run inside GCE VMs. That is 32 vCPU and about 125 GB for all sandboxes.
-The sandbox images are the 500 SWE-bench Verified task images, converted once to overlaybd and
-pushed to Artifact Registry (`us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/`
-`swebench-verified`), from which nodes lazily load blocks into a 15 GB image cache and a 15 GB
-remote-block cache; the snapshot cache is 5 GB and node-local. Every sandbox is declared
-2 vCPU / 2 GB, which AgentENV does not reserve, so 100 sandboxes declare 6 times the pool's
-CPU and 1.6 times its memory. The Firecracker API socket timeout was raised from the default
-3 s to 15 s. Prototype limitations apply: no TLS, one shared API key, access by port-forward,
-paused sandboxes and templates live on the node that created them.
+- **Software:** AgentENV v0.2.2. Gateway and scheduler built from the upstream tag with Cloud
+  Build, one replica each. Runtime is the upstream `aenv-server:v0.2.2` image plus a six-line
+  patch for Artifact Registry's relative redirects.
+- **Cluster:** GKE `barkland-test`, project `gke-ai-eco-dev`, zone `us-central1-a`, GKE 1.35.8,
+  Container-Optimized OS, kernel 6.12.
+- **Sandbox nodes:** 4 × c2-standard-8 in node pool `kvm-pool-c2` (Intel Cascade Lake, 8 vCPU,
+  32 GB, 100 GB pd-balanced boot disk, no local SSD), nested virtualization. 32 vCPU and about
+  125 GB in total for sandboxes.
+- **Control plane nodes:** gateway and scheduler on the `default-pool` e2-standard-4 nodes.
+- **Images:** the 500 SWE-bench Verified task images, converted once to overlaybd and stored in
+  Artifact Registry (`us-central1-docker.pkg.dev/gke-ai-eco-dev/agentenv-images/swebench-verified`).
+  Nodes lazily load blocks into a 15 GB image cache and a 15 GB remote-block cache.
+- **Snapshots:** 5 GB node-local snapshot cache; paused sandboxes and templates stay on the node
+  that created them.
+- **Sandbox size:** 2 vCPU / 2 GB declared per sandbox, not reserved by AgentENV, so 100
+  sandboxes declare 6 times the pool's CPU and 1.6 times its memory.
+- **Tuning:** Firecracker API socket timeout raised from 3 s to 15 s.
+- **Prototype limits:** no TLS, one shared API key, access by port-forward.
 
 ## How it was measured
 
