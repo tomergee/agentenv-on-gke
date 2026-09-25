@@ -125,11 +125,19 @@ def cond(obj, ctype):
     return None, ""
 
 def run_cmd(pod, argv, timeout=180):
+    """Exec through a private ApiClient: kubernetes.stream.stream() monkeypatches api_client.request
+    for the duration of the call, so a shared client would route other threads' REST calls into
+    the websocket path (bodyless 'NoneType has no attribute decode' failures under concurrency)."""
     def go():
-        out = stream(core.connect_get_namespaced_pod_exec, pod, NS, command=argv, container="main",
-                     stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False)
-        out.run_forever(timeout=timeout); rc = out.returncode; txt = (out.read_stdout() or "") + (out.read_stderr() or "")
-        out.close(); return (rc if rc is not None else -1), txt
+        ac = client.ApiClient(); api = client.CoreV1Api(ac)
+        try:
+            out = stream(api.connect_get_namespaced_pod_exec, pod, NS, command=argv, container="main",
+                         stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False)
+            out.run_forever(timeout=timeout); rc = out.returncode; txt = (out.read_stdout() or "") + (out.read_stderr() or "")
+            out.close(); return (rc if rc is not None else -1), txt
+        finally:
+            try: ac.close()
+            except Exception: pass               # noqa: BLE001
     return retry(go)
 
 # ---------------------------------------------------------------- snapshot helpers
