@@ -96,7 +96,7 @@ def create(plural, body):
         if e.status == 409: return cust.get_namespaced_custom_object(EXT[0], EXT[1], NS, plural, body["metadata"]["name"])
         raise
 
-def retry(fn, tries=4, base=0.3):
+def retry(fn, tries=6, base=0.3):
     """The python client turns some transport errors into a bodyless ApiException that it then
     fails to decode (AttributeError); treat those like any transient error and retry."""
     for i in range(tries):
@@ -125,10 +125,12 @@ def cond(obj, ctype):
     return None, ""
 
 def run_cmd(pod, argv, timeout=180):
-    out = stream(core.connect_get_namespaced_pod_exec, pod, NS, command=argv, container="main",
-                 stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False)
-    out.run_forever(timeout=timeout); rc = out.returncode; txt = (out.read_stdout() or "") + (out.read_stderr() or "")
-    out.close(); return (rc if rc is not None else -1), txt
+    def go():
+        out = stream(core.connect_get_namespaced_pod_exec, pod, NS, command=argv, container="main",
+                     stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False)
+        out.run_forever(timeout=timeout); rc = out.returncode; txt = (out.read_stdout() or "") + (out.read_stderr() or "")
+        out.close(); return (rc if rc is not None else -1), txt
+    return retry(go)
 
 # ---------------------------------------------------------------- snapshot helpers
 SEED_CMD = ("nonce=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \\n'); echo $nonce > /dev/shm/nonce; "
@@ -148,13 +150,13 @@ def snapshot_pod(pod, trigger_name, timeout=600):
     t0 = time.monotonic()
     body = {"apiVersion": f"{PS[0]}/{PS[1]}", "kind": "PodSnapshotManualTrigger",
             "metadata": {"name": trigger_name, "namespace": NS, "labels": {"asbench": "1"}}, "spec": {"targetPod": pod}}
-    try: cust.create_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshotmanualtriggers", body)
+    try: retry(lambda: cust.create_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshotmanualtriggers", body))
     except client.exceptions.ApiException as e:
         if e.status != 409: return False, None, round(time.monotonic() - t0, 3), f"trigger create: {e.status} {e.reason}"
     snap = None
     while time.monotonic() - t0 < timeout:
-        try: tr = cust.get_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshotmanualtriggers", trigger_name)
-        except client.exceptions.ApiException: tr = {}
+        try: tr = retry(lambda: cust.get_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshotmanualtriggers", trigger_name))
+        except Exception: tr = {}                # noqa: BLE001
         st = tr.get("status") or {}
         # GKE reports the created PodSnapshot as status.snapshotCreated.name once the Triggered
         # condition is True/Complete (this is what the SDK extension reads too).
@@ -163,8 +165,8 @@ def snapshot_pod(pod, trigger_name, timeout=600):
             if c.get("type") == "Triggered" and c.get("status") == "False" and c.get("reason"):
                 return False, None, round(time.monotonic() - t0, 3), f"trigger failed: {c.get('reason')} {c.get('message','')[:160]}"
         if snap:
-            try: ps = cust.get_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshots", snap)
-            except client.exceptions.ApiException: ps = None
+            try: ps = retry(lambda: cust.get_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshots", snap))
+            except Exception: ps = None          # noqa: BLE001
             if ps:
                 for c in ((ps.get("status") or {}).get("conditions") or []):
                     if c.get("type") == "Ready" and c.get("status") == "True": return True, snap, round(time.monotonic() - t0, 3), ""
@@ -181,8 +183,8 @@ def set_operating_mode(sandbox, mode):
     cust.patch_namespaced_custom_object(CORE[0], CORE[1], NS, "sandboxes", sandbox, {"spec": {"operatingMode": mode}})
 
 def pod_restored(pod):
-    try: p = core.read_namespaced_pod(pod, NS)
-    except client.exceptions.ApiException: return None, ""
+    try: p = retry(lambda: core.read_namespaced_pod(pod, NS))
+    except Exception: return None, "pod read failed"   # noqa: BLE001
     for c in (p.status.conditions or []):
         if c.type == "PodRestored": return c.status == "True", (c.message or "")[:160]
     return False, "no PodRestored condition"
@@ -195,14 +197,15 @@ def wait_pod_gone(pod, uid, timeout=300):
             if p.metadata.uid != uid: return round(time.monotonic() - t0, 3)
         except client.exceptions.ApiException as e:
             if e.status == 404: return round(time.monotonic() - t0, 3)
-        time.sleep(0.2)
+        except AttributeError: pass              # bodyless transport error; poll again
+        time.sleep(0.3)
     return None
 
 def wait_claim_ready(name, t0, timeout=900):
     while time.monotonic() - t0 < timeout:
         c = get("sandboxclaims", name) or {}; s, _ = cond(c, "Ready")
         if s == "True": return True
-        time.sleep(0.2)
+        time.sleep(0.2 if N <= 10 else 0.5)
     return False
 
 # ---------------------------------------------------------------- setup (templates + pools)
@@ -249,9 +252,18 @@ if MODE == "golden":
     golden.update({"snapshot_ok": ok, "snapshot": snap, "snapshot_s": snap_s, "snapshot_error": why})
     if not ok: print(json.dumps({"fatal": f"golden snapshot failed: {why}"}), flush=True); sys.exit(1)
     time.sleep(SNAP_SETTLE)
-    tfill = time.monotonic(); cust.patch_namespaced_custom_object(EXT[0], EXT[1], NS, "sandboxwarmpools", pname, {"spec": {"replicas": N + 1}})
+    # Members that existed before the snapshot keep their cold state; roll the pool so every
+    # member the claims can adopt was created after the golden and therefore restored from it.
+    cust.patch_namespaced_custom_object(EXT[0], EXT[1], NS, "sandboxwarmpools", pname, {"spec": {"replicas": 0}})
+    troll = time.monotonic()
+    while time.monotonic() - troll < 300:
+        others = [q for q in core.list_namespaced_pod(NS, label_selector="asbench=1").items if q.metadata.name != primer_pod]
+        if not others: break
+        time.sleep(1)
+    golden["roll_s"] = round(time.monotonic() - troll, 1)
+    tfill = time.monotonic(); cust.patch_namespaced_custom_object(EXT[0], EXT[1], NS, "sandboxwarmpools", pname, {"spec": {"replicas": N}})
     while time.monotonic() - tfill < POOL_TIMEOUT:
-        if int(((get("sandboxwarmpools", pname) or {}).get("status") or {}).get("readyReplicas") or 0) >= N + 1: break
+        if int(((get("sandboxwarmpools", pname) or {}).get("status") or {}).get("readyReplicas") or 0) >= N: break
         time.sleep(1)
     golden["golden_fill_s"] = round(time.monotonic() - tfill, 1)   # N members restored from the golden
     members = [p for p in core.list_namespaced_pod(NS, label_selector="asbench=1").items if p.metadata.name != primer_pod]
@@ -288,7 +300,7 @@ def one(i, pool, tag):
             if sbname and "t_bound" not in rec: rec["t_bound"] = round(time.monotonic() - t0, 3); sb = sbname
             s, reason = cond(c, "Ready")
             if s == "True": state = "ready"; break
-            time.sleep(0.2)
+            time.sleep(0.2 if N <= 10 else 0.5)
         rec["t_running"] = round(time.monotonic() - t0, 3)
         if state != "ready": rec["status"] = "not_ready"; return rec
         pod = sb or name
@@ -309,7 +321,7 @@ def one(i, pool, tag):
         if MODE == "suspend" and rec["status"] == "pass":
             rc2, st = run_cmd(pod, ["/bin/sh", "-c", SEED_CMD]); seed = parse_kv(st); rec["seed"] = seed
             sb_obj = get("sandboxclaims", name) or {}; sbname = (sb_obj.get("status") or {}).get("sandbox", {}).get("name") or pod
-            pod_uid = core.read_namespaced_pod(pod, NS).metadata.uid
+            pod_uid = retry(lambda: core.read_namespaced_pod(pod, NS)).metadata.uid
             ok, snap, snap_s, why = snapshot_pod(pod, f"susp-{RUN}-{i}")
             rec["snapshot_s"] = snap_s; rec["snapshot"] = snap
             if not ok: rec["status"] = "snapshot_failed"; rec["error"] = why; return rec
@@ -330,8 +342,8 @@ def one(i, pool, tag):
             except ValueError: rec["counter_advanced"] = None
             if not rec["state_restored"]: rec["status"] = "not_restored"
     except Exception as e:                      # noqa: BLE001
-        rec.setdefault("status", "error"); rec["error"] = f"{type(e).__name__}: {e}"[:300]
-        rec["trace"] = traceback.format_exc()[-700:]
+        if rec.get("status") in (None, "pass"): rec["status"] = "error"
+        rec["error"] = f"{type(e).__name__}: {e}"[:300]; rec["trace"] = traceback.format_exc()[-700:]
     return rec
 
 with ThreadPoolExecutor(max_workers=N) as ex:
