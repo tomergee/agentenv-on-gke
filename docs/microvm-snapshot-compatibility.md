@@ -6,9 +6,9 @@ storage requirements that fell out of it.
 
 > **TL;DR**
 >
-> **Hardware:** GKE Standard with Intel x86 nodes that have nested virtualization. Use C4 `-lssd` (C3 or Z3 `-lssd` also work, and C3 bare metal gives native KVM). Keep one CPU model per pool.
+> **What microVM RL needs:** every rollout runs in its own Firecracker VM, which is paused, resumed and forked from snapshots. So each node needs **KVM** (nested virtualization or bare metal), **the same CPU model across the pool** (a snapshot only restores on the same CPU), and **fast local NVMe** (about 1 TB per node for image caches, paused VMs and template memory). On top of that, a shared GCS or Filestore repository holds templates, and images are pre-converted to overlaybd in a same-region Artifact Registry.
 >
-> **Storage:** about 1 TB of local NVMe per node for caches and paused VMs, a shared GCS or Filestore repository for templates, and images pre-converted to overlaybd in a same-region Artifact Registry.
+> **Very few GCP families qualify:** of about 37 machine series, only **5 have KVM, GKE support and local SSD**: **C4 `-lssd` (recommended), C3 `-lssd`, Z3**, and the older N2 and C2. E2, every AMD series except N4D, and all Arm VMs have no KVM. The bare-metal shapes with the best storage (C4 and Z3 metal) aren't supported on GKE. The only GKE bare metal on x86, C3 metal, has no local SSD.
 
 ## Instance types
 
