@@ -156,10 +156,12 @@ def snapshot_pod(pod, trigger_name, timeout=600):
         try: tr = cust.get_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshotmanualtriggers", trigger_name)
         except client.exceptions.ApiException: tr = {}
         st = tr.get("status") or {}
-        snap = st.get("podSnapshotName") or st.get("snapshotName") or (st.get("podSnapshot") or {}).get("name")
-        if not snap:
-            for c in st.get("conditions", []) or []:
-                if c.get("type") == "Triggered" and c.get("status") == "True": snap = snap or c.get("message", "").split()[-1]
+        # GKE reports the created PodSnapshot as status.snapshotCreated.name once the Triggered
+        # condition is True/Complete (this is what the SDK extension reads too).
+        snap = (st.get("snapshotCreated") or {}).get("name") or st.get("podSnapshotName")
+        for c in st.get("conditions", []) or []:
+            if c.get("type") == "Triggered" and c.get("status") == "False" and c.get("reason"):
+                return False, None, round(time.monotonic() - t0, 3), f"trigger failed: {c.get('reason')} {c.get('message','')[:160]}"
         if snap:
             try: ps = cust.get_namespaced_custom_object(PS[0], PS[1], NS, "podsnapshots", snap)
             except client.exceptions.ApiException: ps = None
