@@ -205,8 +205,11 @@ def wait_claim_ready(name, t0, timeout=900):
 
 # ---------------------------------------------------------------- setup (templates + pools)
 setup = {"mode": MODE}; ts0 = time.monotonic()
+MODE_TAG = {"warm-one": "w", "cold-one": "c", "suspend": "s", "golden": "g"}.get(MODE, "w" if warm else "c")
 if one_image:
-    tag, digest = images[0]; tname = f"asb-{'w' if warm else 'c'}-one"; pname = tname
+    # One template per mode: pod labels differ per mode (snapshot policies key on them) and a
+    # golden run that exits early must not leave a template a later warm run would reuse.
+    tag, digest = images[0]; tname = f"asb-{MODE_TAG}-one"; pname = tname
     create("sandboxtemplates", template_body(tname, tag, digest))
     replicas = N if warm else 0
     existing = get("sandboxwarmpools", pname)
