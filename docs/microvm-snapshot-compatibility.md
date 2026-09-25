@@ -10,6 +10,33 @@ storage requirements that fell out of it.
 >
 > **Storage:** about 1 TB of local NVMe per node for caches and paused VMs, a shared GCS or Filestore repository for templates, and images pre-converted to overlaybd in a same-region Artifact Registry.
 
+## Instance types
+
+✅ = yes, ⚠️ = partly or with caveats, ❌ = no. "Good storage" means local NVMe SSD on the
+shape.
+
+| Instance type | CPU | KVM | GKE | Good storage | Verdict |
+|---|---|---|---|---|---|
+| `c4-*-lssd` VMs | Intel Granite / Emerald Rapids | ✅ nested | ✅ | ✅ up to 18 TiB | **Recommended** |
+| `c3-*-lssd` VMs | Intel Sapphire Rapids | ✅ nested | ✅ | ✅ up to 12 TiB | Good |
+| `z3-highmem-*-lssd` VMs | Intel Sapphire Rapids | ✅ nested | ✅ | ✅ up to 36 TiB | Good; SSD may be unavailable during maintenance |
+| `n2-*` VMs | Intel Cascade / Ice Lake | ✅ nested | ✅ | ✅ up to 9 TiB | OK; older CPUs, pin the CPU platform |
+| `c2-*` VMs | Intel Cascade Lake | ✅ nested | ✅ | ⚠️ up to 3 TiB | OK; **our prototype** (`c2-standard-8`) |
+| `c3-*-192-metal` | Intel Sapphire Rapids | ✅ native | ✅ GA | ❌ Hyperdisk only | OK; no nested overhead, but benchmark the disk |
+| `c4-*` VMs (no `-lssd`) | Intel Granite / Emerald Rapids | ✅ nested | ✅ | ❌ Hyperdisk only | OK; **our `kvm-pool-c4`** |
+| `n4-*`, `c4n-*`, `h3-*` VMs | Intel | ✅ nested | ✅ | ❌ no local SSD on GKE | OK for low paused density |
+| `n4d-*` VMs | AMD Turin | ✅ nested (only AMD) | ✅ | ❌ | OK; separate pool from Intel |
+| `m4-*` VMs | Intel Emerald Rapids | ⚠️ docs conflict | ✅ | ❌ | Test first |
+| `c4-*-288-lssd-metal` | Intel Granite Rapids | ✅ native | ❌ | ✅ 18 TiB | Not on GKE |
+| `z3-*-highlssd-metal` | Intel Sapphire Rapids | ✅ native | ❌ | ✅ 72 TiB | Not on GKE |
+| `c4a-*-metal` | Google Axion (Arm) | ✅ native | ✅ GA | ❌ | Arm unverified in AgentENV |
+| `c4d-*-metal`, `z4d-*-metal`, `x4-*` | AMD / Intel | ✅ native | ❌ | ❌ mostly none | Not on GKE |
+| E2, N2D, C2D, C3D, C4D, T2D, H4D, Z4D, G4 VMs | Intel (E2) / AMD | ❌ | ✅ | varies | Incompatible |
+| C4A, N4A, T2A VMs | Arm | ❌ | ✅ | varies | Incompatible |
+| M1, M2, M3, X5, A3, A4, A4X | Intel / Arm | ❌ | varies | varies | Incompatible |
+
+Full per-family details and sources: [gcp-instance-compatibility.md](gcp-instance-compatibility.md).
+
 ## Why
 
 | Requirement | Reason |
@@ -34,6 +61,3 @@ storage requirements that fell out of it.
 - About **10 concurrent boots per 8 vCPUs** saturates a node.
 - GCS ignores S3 conditional writes, so AgentENV's catalog becomes last-writer-wins. Use a single writer or Filestore.
 - 100 GB boot disks work for a prototype but not in production.
-
-The per-family list is in [gcp-instance-compatibility.md](gcp-instance-compatibility.md).
-C4 bare metal is **not** supported on GKE.
