@@ -9,6 +9,7 @@ cd "$(dirname "$0")/../.."
 export NODE_POOL=gvisor-pool-c2 RUNTIME_CLASS=gvisor POD_SA=asbench-pods JOB_TIMEOUT_S=3600
 CTX=gke_gke-ai-eco-dev_us-central1-a_barkland-test; K="kubectl --context $CTX"
 echo "== $(date +%T) gvisor nodes:"; $K get nodes -l bench=c2gvisor --no-headers | awk '{print $1, $2}'
+N_GV=$($K get nodes -l bench=c2gvisor --no-headers 2>/dev/null | grep -c " Ready"); [ "${N_GV:-0}" -ge 1 ] || { echo "no Ready gvisor-pool-c2 nodes; refusing to run"; exit 1; }
 $K get podsnapshotstorageconfigs asbench-snapshots >/dev/null || { echo "storage config missing"; exit 1; }
 run() { echo "=== $(date +%T) run $*"; tests/asbench/run.sh "$1" "$2" "gv-$3" 2>&1 | tail -1 || true; }
 run warm-one 1 warm-one-1; run warm-one 10 warm-one-10; run warm-one 100 warm-one-100; run warm-one 100 warm-one-100-b
