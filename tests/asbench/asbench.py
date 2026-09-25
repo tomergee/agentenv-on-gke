@@ -254,11 +254,17 @@ if MODE == "golden":
     time.sleep(SNAP_SETTLE)
     # Members that existed before the snapshot keep their cold state; roll the pool so every
     # member the claims can adopt was created after the golden and therefore restored from it.
-    cust.patch_namespaced_custom_object(EXT[0], EXT[1], NS, "sandboxwarmpools", pname, {"spec": {"replicas": 0}})
     troll = time.monotonic()
-    while time.monotonic() - troll < 300:
-        others = [q for q in core.list_namespaced_pod(NS, label_selector="asbench=1").items if q.metadata.name != primer_pod]
-        if not others: break
+    cust.patch_namespaced_custom_object(EXT[0], EXT[1], NS, "sandboxwarmpools", pname, {"spec": {"replicas": 0}})
+    try:   # also delete the unclaimed members outright, as the golden example does (kubectl delete sandbox -l agents.x-k8s.io/warm-pool-sandbox)
+        for sb in cust.list_namespaced_custom_object(CORE[0], CORE[1], NS, "sandboxes", label_selector="agents.x-k8s.io/warm-pool-sandbox").get("items", []):
+            if sb["metadata"]["name"] != primer_pod:
+                try: cust.delete_namespaced_custom_object(CORE[0], CORE[1], NS, "sandboxes", sb["metadata"]["name"])
+                except client.exceptions.ApiException: pass
+    except Exception: pass                   # noqa: BLE001
+    while time.monotonic() - troll < 90:
+        st = (get("sandboxwarmpools", pname) or {}).get("status") or {}
+        if int(st.get("replicas") or 0) == 0 and int(st.get("readyReplicas") or 0) == 0: break
         time.sleep(1)
     golden["roll_s"] = round(time.monotonic() - troll, 1)
     tfill = time.monotonic(); cust.patch_namespaced_custom_object(EXT[0], EXT[1], NS, "sandboxwarmpools", pname, {"spec": {"replicas": N}})
